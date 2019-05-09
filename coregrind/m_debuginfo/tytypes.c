@@ -44,6 +44,11 @@
 #include "priv_d3basics.h"     /* ML_(evaluate_Dwarf3_Expr) et al */
 #include "priv_tytypes.h"      /* self */
 
+#include "pub_core_execontext.h" // pgbovine
+#include "pub_core_addrinfo.h" // pgbovine
+#include "pub_core_oset.h" // pgbovine
+
+#include "pub_tool_mallocfree.h" // pgbovine - potential abstration violation with _tool_.h include, ergh
 
 /* Does this TyEnt denote a type, as opposed to some other kind of
    thing? */
@@ -316,6 +321,616 @@ void ML_(pp_TyEnt_C_ishly)( const XArray* /* of TyEnt */ tyents,
   unhandled:
    VG_(printf)("pp_TyEnt_C_ishly:unhandled: ");
    ML_(pp_TyEnt)(ent);
+   vg_assert(0);
+}
+
+
+// pgbovine version of pp_TyBound_C_ishly
+/*
+static void pg_pp_TyBound( const XArray* tyents, UWord cuOff )
+{
+   TyEnt* ent = ML_(TyEnts__index_by_cuOff)( tyents, NULL, cuOff );
+   if (!ent) {
+      VG_(printf)("**bounds-have-invalid-cuOff**");
+      return;
+   }
+   vg_assert(ent->tag == Te_Bound);
+   if (ent->Te.Bound.knownL && ent->Te.Bound.knownU
+       && ent->Te.Bound.boundL == 0) {
+      VG_(printf)("[%lld]", 1 + ent->Te.Bound.boundU);
+   }
+   else
+   if (ent->Te.Bound.knownL && (!ent->Te.Bound.knownU) 
+       && ent->Te.Bound.boundL == 0) {
+      VG_(printf)("[]");
+   }
+   else
+      ML_(pp_TyEnt)( ent );
+}
+*/
+
+SizeT pg_get_elt_size(const XArray* /* of TyEnt */ ents,
+                      UWord cuOff_to_find);
+SizeT pg_get_elt_size(const XArray* /* of TyEnt */ ents,
+                      UWord cuOff_to_find)
+{
+  TyEnt* ent = ML_(TyEnts__index_by_cuOff)(ents, NULL, cuOff_to_find);
+
+  switch (ent->tag) {
+    case Te_TyBase:
+      return ent->Te.TyBase.szB;
+    case Te_TyPtr:
+    case Te_TyRef:
+      return ent->Te.TyPorR.szB;
+    case Te_TyEnum:
+      return ent->Te.TyEnum.szB;
+    case Te_TyStOrUn:
+      return ent->Te.TyStOrUn.szB;
+    case Te_TyTyDef:
+      return pg_get_elt_size(ents, ent->Te.TyTyDef.typeR); // recurse!
+    case Te_TyQual: // qualifier such as 'const', 'volatile', and 'restrict'
+      return pg_get_elt_size(ents, ent->Te.TyQual.typeR); // recurse!
+    case Te_TyVoid:
+        return 1; // display elements with a faux size of 1 byte
+
+    // TODO: handle these in the future
+    case Te_EMPTY:
+    case Te_INDIR:
+    case Te_UNKNOWN:
+    case Te_Atom:
+    case Te_Field:
+    case Te_Bound:
+    case Te_TyPtrMbr:
+    case Te_TyRvalRef:
+    case Te_TyArray:
+    case Te_TyFn:
+      VG_(printf)("UNHANDLED ent->tag: %d", ent->tag);
+      vg_assert(0); // unhandled
+  }
+  vg_assert(0); // unhandled
+}
+
+
+// pgbovine version of ML_(pp_TyEnt_C_ishly)
+void ML_(pg_pp_varinfo)( const XArray* /* of TyEnt */ tyents,
+                         UWord cuOff,
+                         Addr data_addr,
+                         int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
+                         OSet* encoded_addrs,
+                         VgFile* trace_fp)
+{
+   TyEnt* ent = ML_(TyEnts__index_by_cuOff)( tyents, NULL, cuOff );
+   if (!ent) {
+      vg_assert(0); // pgbovine - die hard
+      VG_(printf)("**type-has-invalid-cuOff**");
+      return;
+   }
+
+   Addr bad_addr;
+   UInt otag = 0;
+   int res;
+
+   switch (ent->tag) {
+      case Te_TyVoid:
+         // display a void type as an UNSIGNED BYTE since there's no
+         // better way to do it :/
+         ent->tag = Te_TyBase;
+         ent->Te.TyBase.name = "void byte";
+         ent->Te.TyBase.szB = 1;   // 1 byte long
+         ent->Te.TyBase.enc = 'U'; // display as unsigned
+         // super hacky, DO NOT do a 'break' here; instead, fall through
+         // to Te_TyBase since we are now masquerading as a Te_TyBase ... whoa!
+
+      case Te_TyBase:
+         if (!ent->Te.TyBase.name) goto unhandled;
+
+         // record that this block has been rendered
+         if (!VG_(OSetWord_Contains)(encoded_addrs, (UWord)data_addr)) {
+           VG_(OSetWord_Insert)(encoded_addrs, (UWord)data_addr);
+         }
+
+         VG_(fprintf)(trace_fp,
+                     "{\"addr\":\"%p\", \"kind\":\"base\", \"type\":\"%s\", \"size\":%u, \"val\":",
+                     (void*)data_addr,
+                     ent->Te.TyBase.name,
+                     ent->Te.TyBase.szB);
+
+         // check whether this memory has been allocated and/or initialized
+         res = is_mem_defined_func(data_addr, ent->Te.TyBase.szB,
+                                       &bad_addr, &otag);
+         if (res == 6 /* MC_AddrErr enum value */) {
+           VG_(fprintf)(trace_fp, "\"<UNALLOCATED>\"}");
+           return; // early!
+         } else if (res == 7 /* MC_ValueErr enum value */) {
+           VG_(fprintf)(trace_fp, "\"<UNINITIALIZED>\"}");
+           return; // early!
+         } else {
+           tl_assert(res == 5 /* MC_Ok enum value */);
+         }
+
+         if (ent->Te.TyBase.enc == 'S') {
+           if (ent->Te.TyBase.szB == sizeof(char)) {
+             // print as a JSON string to properly handle special characters
+             char val = *((char*)data_addr);
+             char str[3];
+             // special-case for rendering the '\0' null terminator
+             if (val == '\0') {
+               str[0] = '\\';
+               str[1] = '0';
+               str[2] = '\0';
+             } else {
+               str[0] = val;
+               str[1] = '\0';
+             }
+             JsonNode* node = json_mkstring(str);
+             char* encoded = json_encode(node);
+             VG_(fprintf)(trace_fp, "%s", encoded);
+             VG_(free)(encoded);
+             json_delete(node);
+           } else if (ent->Te.TyBase.szB == sizeof(short)) {
+             VG_(fprintf)(trace_fp, "%d", *((short*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(int)) {
+             VG_(fprintf)(trace_fp, "%d", *((int*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(long int)) {
+             VG_(fprintf)(trace_fp, "%ld", *((long int*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(long long int)) {
+             VG_(fprintf)(trace_fp, "%lld", *((long long int*)data_addr));
+           } else {
+             // what other stuff is here?!?
+             vg_assert(0);
+           }
+         } else if (ent->Te.TyBase.enc == 'U') {
+           if (ent->Te.TyBase.szB == sizeof(unsigned char)) {
+             VG_(fprintf)(trace_fp, "%u", *((unsigned char*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(unsigned short)) {
+             VG_(fprintf)(trace_fp, "%u", *((unsigned short*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(unsigned int)) {
+             VG_(fprintf)(trace_fp, "%u", *((unsigned int*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(unsigned long int)) {
+             VG_(fprintf)(trace_fp, "%lu", *((unsigned long int*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(unsigned long long int)) {
+             VG_(fprintf)(trace_fp, "%llu", *((unsigned long long int*)data_addr));
+           } else {
+             // what other stuff is here?!?
+             vg_assert(0);
+           }
+         } else if (ent->Te.TyBase.enc == 'F') {
+           // careful about subtleties around floats and doubles and stuff ..
+           if (ent->Te.TyBase.szB == sizeof(float)) {
+             VG_(fprintf)(trace_fp, "%f", *((float*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(double)) {
+             VG_(fprintf)(trace_fp, "%f", *((double*)data_addr));
+           } else if (ent->Te.TyBase.szB == sizeof(long double)) {
+             // TODO: doesn't currently work for some reason :(
+             // long doubles are shown as uninit or junky values :(
+             VG_(fprintf)(trace_fp, "%Lf", *((long double*)data_addr));
+           } else {
+             // what other stuff is here?!?
+             vg_assert(0);
+           }
+         } else if (ent->Te.TyBase.enc == 'C') {
+           // complex floats are unhandled right now
+           vg_assert(0); // unhandled
+         } else {
+           vg_assert(0); // are there any cases left?
+         }
+
+         VG_(fprintf)(trace_fp, "}");
+         break;
+      case Te_TyPtr:
+      case Te_TyRef: /* TODO: maybe tag this as a special C++ reference type later? */
+         // record that this block has been rendered
+         if (!VG_(OSetWord_Contains)(encoded_addrs, (UWord)data_addr)) {
+           VG_(OSetWord_Insert)(encoded_addrs, (UWord)data_addr);
+         }
+
+         VG_(fprintf)(trace_fp,
+                      "{\"addr\":\"%p\", \"kind\":\"pointer\", \"size\":%u, \"val\":",
+                      (void*)data_addr,
+                      ent->Te.TyPorR.szB);
+
+         // check whether this memory has been allocated and/or initialized
+         res = is_mem_defined_func(data_addr, ent->Te.TyPorR.szB,
+                                   &bad_addr, &otag);
+
+         if (res == 6 /* MC_AddrErr enum value */) {
+           VG_(fprintf)(trace_fp, "\"<UNALLOCATED>\"}");
+           return; // early!
+         } else if (res == 7 /* MC_ValueErr enum value */) {
+           VG_(fprintf)(trace_fp, "\"<UNINITIALIZED>\"}");
+           return; // early!
+         } else {
+           tl_assert(res == 5 /* MC_Ok enum value */);
+         }
+
+         // ok so now we know data_addr is legit, so we can dereference
+         // it to get its value
+         Addr ptr_val = *((Addr*)data_addr);
+         VG_(fprintf)(trace_fp, "\"%p\"", (void*)ptr_val);
+
+         // what do we do now? ptr_val is either a pointer:
+         // - that's invalid (e.g., null, garbage)
+         // - to the stack
+         // - to the global area
+         // - to the heap
+         //
+         // if it's a pointer to the stack or global area, then if that
+         // variable is in scope, then it will already be printed out
+         // elsewhere, so we just need to print the pointer value so
+         // that the visualization knows to draw an arrow to there.
+         //
+         // if it's a pointer to the heap AND this heap object hasn't
+         // yet been traversed (to be visualized), then we need to go in
+         // and traverse it so that we can visualize it.
+
+         AddrInfo ai;
+         VG_(describe_addr)(ptr_val, &ai);
+         if (ai.tag == Addr_Block) {
+           // if this is a heap pointer ...
+           SizeT element_size = pg_get_elt_size(tyents, ent->Te.TyPorR.typeR);
+
+           Addr block_base_addr = ptr_val - ai.Addr.Block.rwoffset;
+
+           //VG_(printf)("<heap ptr %p, sz: %d, base: %p, off: %d, eltsize: %d>",
+           //            (void*)ptr_val,
+           //            (int)ai.Addr.Block.block_szB /* total block size in bytes; doesn't mean
+           //                                            all has been allocated by malloc, tho */,
+           //            (void*)block_base_addr,
+           //            (int)ai.Addr.Block.rwoffset /* offset in bytes */,
+           //            (int)element_size);
+
+           vg_assert(encoded_addrs);
+
+           // avoid rendering duplicates, to prevent redundancies and infinite loops
+           if (!VG_(OSetWord_Contains)(encoded_addrs,
+                                       (UWord)block_base_addr)) {
+             VG_(OSetWord_Insert)(encoded_addrs,
+                                  (UWord)block_base_addr);
+
+             VG_(fprintf)(trace_fp, ", \"deref_val\":\n");
+
+             VG_(fprintf)(trace_fp,
+                          "{\"addr\":\"%p\", \"kind\":\"heap_block\", \"val\": [\n  ",
+                          (void*)block_base_addr);
+
+             // scan until we find first UNALLOC address, and use that as
+             // the upper bound of the heap array
+             // TODO: any risk of overrun into other blocks? hopefully
+             // not, due to redzones
+             Addr cur_addr = block_base_addr;
+             Bool first_elt = True;
+             while (1) {
+               res = is_mem_defined_func(cur_addr, element_size,
+                                         &bad_addr, &otag);
+               if (res == 6 /* MC_AddrErr enum value */) {
+                 //VG_(printf)("\n  UNALLOC");
+                 break; // break on first unallocated byte since that marks the end of the block (hopefully!)
+               }
+
+               if (first_elt) {
+                 first_elt = False;
+               } else {
+                 VG_(fprintf)(trace_fp, ",\n  ");
+               }
+               ML_(pg_pp_varinfo)(tyents, ent->Te.TyPorR.typeR, cur_addr,
+                                  is_mem_defined_func, encoded_addrs, trace_fp);
+               cur_addr += element_size;
+             }
+
+             VG_(fprintf)(trace_fp, "]}");
+           } else {
+             //VG_(printf)("heap pointer already encoded!\n");
+           }
+
+           VG_(fprintf)(trace_fp, "}");
+         } else if (ai.tag == Addr_SegmentKind) {
+           // this is a pointer to some global client area, i think
+           //
+           // there aren't any redzones, so use heuristics to figure
+           // out what to print out here. the most common is a string
+           // literal like "hello world", so in that case, just end
+           // at the null terminator.
+           //VG_(printf)("<client segment ptr %p, tag: %d R:%d, W:%d, X:%d>", (void*)ptr_val,
+           //            (int)ai.tag,
+           //            (int)ai.Addr.SegmentKind.hasR,
+           //            (int)ai.Addr.SegmentKind.hasW,
+           //            (int)ai.Addr.SegmentKind.hasX);
+
+           // avoid rendering duplicates, to prevent redundancies and infinite loops
+           if (!VG_(OSetWord_Contains)(encoded_addrs,
+                                       (UWord)ptr_val)) {
+             VG_(OSetWord_Insert)(encoded_addrs, (UWord)ptr_val);
+
+             TyEnt* element_ent = ML_(TyEnts__index_by_cuOff)(tyents, NULL, ent->Te.TyPorR.typeR);
+             SizeT element_size = pg_get_elt_size(tyents, ent->Te.TyPorR.typeR);
+
+             // strip all type qualifiers from element before
+             // dereferencing it, so that we can print values like:
+             // const char* = "abc";
+             while (element_ent->tag == Te_TyQual) {
+               element_ent = ML_(TyEnts__index_by_cuOff)(tyents, NULL, element_ent->Te.TyQual.typeR);
+             }
+
+             // only try to print out string literals like "hello world"
+             // since there's a clear null-terminator boundary. other
+             // values don't have clear boundaries, so we can't just
+             // probe ahead to find the end (because globals don't have
+             // redzones, i don't think)
+             if (element_ent->tag == Te_TyBase &&
+                 element_ent->Te.TyBase.enc == 'S' &&
+                 element_ent->Te.TyBase.szB == sizeof(char)) {
+
+               VG_(fprintf)(trace_fp, ", \"deref_val\":\n");
+
+               // note that we use the 'heap_block' kind even though
+               // *technically* these global strings aren't on the heap;
+               // they're in a special 'globals' area; but whatevers!
+               VG_(fprintf)(trace_fp, "{\"addr\":\"%p\", \"kind\":\"heap_block\", \"val\": [\n  ",
+                            (void*)ptr_val);
+
+               Addr cur_addr = ptr_val;
+               Bool first_elt = True;
+               while (1) {
+                 res = is_mem_defined_func(cur_addr, element_size,
+                                           &bad_addr, &otag);
+                 if (res == 6 /* MC_AddrErr enum value */) {
+                   //VG_(printf)("\n  UNALLOC");
+                   break; // break on first unallocated byte
+                 } else {
+                   if (first_elt) {
+                     first_elt = False;
+                   } else {
+                     VG_(fprintf)(trace_fp, ",\n  ");
+                   }
+
+                   ML_(pg_pp_varinfo)(tyents, ent->Te.TyPorR.typeR, cur_addr,
+                                      is_mem_defined_func, encoded_addrs, trace_fp);
+
+                   // if it's a '\0' character, then BREAK out of the
+                   // loop since that terminates the string
+                   if (*((char*)cur_addr) == '\0') {
+                     break;
+                   }
+                 }
+                 cur_addr += element_size;
+               }
+
+               VG_(fprintf)(trace_fp, "]}");
+             } else {
+               // don't do anything!
+             }
+           }
+
+           VG_(fprintf)(trace_fp, "}");
+         } else {
+           VG_(fprintf)(trace_fp, "}");
+           //VG_(printf)("<other ptr %p, tag: %d>", (void*)ptr_val, (int)ai.tag);
+         }
+         break;
+      case Te_TyPtrMbr:
+         vg_assert(0); // unhandled
+         //ML_(pg_pp_varinfo)(tyents, ent->Te.TyPorR.typeR, data_addr /* stent */,
+         //                   is_mem_defined_func, encoded_addrs, trace_fp);
+         //VG_(printf)("*");
+         break;
+      case Te_TyRvalRef:
+         vg_assert(0); // unhandled
+         //ML_(pg_pp_varinfo)(tyents, ent->Te.TyPorR.typeR, data_addr /* stent */,
+         //                   is_mem_defined_func, encoded_addrs, trace_fp);
+         //VG_(printf)("&&");
+         break;
+      case Te_TyEnum:
+         // right now print enums as integers, but in the future, try to
+         // pretty-print their symbolic names somehow
+
+         // (lots of unfortunate copy-paste from Te_TyBase case above)
+
+         // record that this block has been rendered
+         if (!VG_(OSetWord_Contains)(encoded_addrs, (UWord)data_addr)) {
+           VG_(OSetWord_Insert)(encoded_addrs, (UWord)data_addr);
+         }
+
+         VG_(fprintf)(trace_fp,
+                     "{\"addr\":\"%p\", \"kind\":\"base\", \"type\":\"%s\", \"size\":%u, \"val\":",
+                     (void*)data_addr,
+                     ent->Te.TyEnum.name ? ent->Te.TyEnum.name : "anonymous enum",
+                     ent->Te.TyEnum.szB);
+
+         // check whether this memory has been allocated and/or initialized
+         res = is_mem_defined_func(data_addr, ent->Te.TyEnum.szB,
+                                       &bad_addr, &otag);
+         if (res == 6 /* MC_AddrErr enum value */) {
+           VG_(fprintf)(trace_fp, "\"<UNALLOCATED>\"}");
+           return; // early!
+         } else if (res == 7 /* MC_ValueErr enum value */) {
+           VG_(fprintf)(trace_fp, "\"<UNINITIALIZED>\"}");
+           return; // early!
+         } else {
+           tl_assert(res == 5 /* MC_Ok enum value */);
+         }
+
+         if (ent->Te.TyEnum.szB <= sizeof(int)) {
+           VG_(fprintf)(trace_fp, "%d", *((int*)data_addr));
+         } else if (ent->Te.TyEnum.szB == sizeof(long int)) {
+           VG_(fprintf)(trace_fp, "%ld", *((long int*)data_addr));
+         } else if (ent->Te.TyEnum.szB == sizeof(long long int)) {
+           VG_(fprintf)(trace_fp, "%lld", *((long long int*)data_addr));
+         } else {
+           // what other stuff is here?!?
+           vg_assert(0);
+         }
+
+         VG_(fprintf)(trace_fp, "}");
+         break;
+      case Te_TyStOrUn:
+         //VG_(printf)("%s %s",
+         //            ent->Te.TyStOrUn.isStruct ? "struct" : "union",
+         //            ent->Te.TyStOrUn.name ? ent->Te.TyStOrUn.name
+         //                                  : "<anonymous>" );
+         // TODO: handle unions later, let's just focus on structs for now
+         vg_assert(ent->Te.TyStOrUn.isStruct);
+
+         VG_(fprintf)(trace_fp,
+                      "{\"addr\":\"%p\", \"kind\":\"struct\", \"type\":\"%s\", \"val\": {\n  ",
+                      (void*)data_addr,
+                      // TODO: patch later with typedef name if possible
+                      ent->Te.TyStOrUn.name ? ent->Te.TyStOrUn.name : "<anonymous>");
+
+         // iterate into ent->Te.TyStOrUn.fieldRs to print all fields
+         XArray* fieldRs = ent->Te.TyStOrUn.fieldRs;
+
+         Bool first_elt = True;
+
+         // adapted from describe_type()
+         for (int i = 0; i < VG_(sizeXA)( fieldRs ); i++) {
+           UWord fieldR = *(UWord*)VG_(indexXA)( fieldRs, i );
+           TyEnt* field = ML_(TyEnts__index_by_cuOff)(tyents, NULL, fieldR);
+           vg_assert(field && field->tag == Te_Field);
+
+           // TODO: handle unions later, let's just focus on structs for now
+           vg_assert(field->Te.Field.isStruct);
+           // TODO: how should we handle nLoc >= 0?
+           vg_assert(field->Te.Field.nLoc == -1);
+
+           if (first_elt) {
+             first_elt = False;
+           } else {
+             VG_(fprintf)(trace_fp, ",\n  ");
+           }
+
+           Addr field_base_addr = data_addr + field->Te.Field.pos.offset;
+           //VG_(printf)("\nFIELD %s offset: %d\n  ",
+           //            field->Te.Field.name,
+           //            (int)field->Te.Field.pos.offset);
+
+           VG_(fprintf)(trace_fp, "\"%s\":", field->Te.Field.name);
+           ML_(pg_pp_varinfo)(tyents, field->Te.Field.typeR, field_base_addr,
+                              is_mem_defined_func, encoded_addrs, trace_fp);
+         }
+
+         VG_(fprintf)(trace_fp, "}}");
+
+         break;
+      case Te_TyArray:
+         if (ent->Te.TyArray.boundRs) {
+            XArray* xa = ent->Te.TyArray.boundRs;
+
+            // we "flatten" a multidimensional array into a 1-D array of
+            // total_array_size elements, which is how C lays them out in
+            // memory anyhow. we also put the array_dimensions in a list,
+            // so that the frontend can use that info to visualize arrays
+            // properly. e.g., int x[2][4] and int x[4][2] look the same
+            // in memory, but should be visualized differently
+            int w;
+            int xa_size = VG_(sizeXA)(xa);
+            Long* array_dimensions = (Long*)VG_(malloc)("array_dimensions", xa_size * sizeof(*array_dimensions));
+            for (w = 0; w < xa_size; w++) {
+              UWord bound_cuOff = *(UWord*)VG_(indexXA)(xa, w);
+              TyEnt* bound_ent = ML_(TyEnts__index_by_cuOff)( tyents, NULL, bound_cuOff );
+              if (bound_ent->Te.Bound.knownL &&
+                  bound_ent->Te.Bound.knownU &&
+                  bound_ent->Te.Bound.boundL == 0) {
+                array_dimensions[w] = bound_ent->Te.Bound.boundU + 1;
+              } else {
+                array_dimensions[w] = -1; // some weird error
+              }
+            }
+
+            int total_array_size = 1;
+            for (w = 0; w < xa_size; w++) {
+              total_array_size *= array_dimensions[w];
+            }
+
+            if (total_array_size > 0) {
+              // the type entry of the array element(s)
+              SizeT element_size = pg_get_elt_size(tyents, ent->Te.TyArray.typeR);
+
+              VG_(fprintf)(trace_fp,
+                           "{\"addr\":\"%p\", \"kind\":\"array\", \"size\":%u, ",
+                           (void*)data_addr,
+                           (unsigned int)total_array_size);
+
+              VG_(fprintf)(trace_fp,
+                           "\"dimensions\": [");
+
+              for (w = 0; w < xa_size; w++) {
+                if (w > 0) {
+                  VG_(fprintf)(trace_fp, ", ");
+                }
+                VG_(fprintf)(trace_fp, "%d", array_dimensions[w]);
+              }
+
+              VG_(fprintf)(trace_fp,
+                           "], \"val\": [\n  ");
+
+              first_elt = True;
+              Addr cur_elt_addr = data_addr;
+              for (Long i = 0; i < total_array_size; i++) {
+                if (first_elt) {
+                  first_elt = False;
+                } else {
+                  VG_(fprintf)(trace_fp, ",\n  ");
+                }
+
+                ML_(pg_pp_varinfo)(tyents, ent->Te.TyArray.typeR, cur_elt_addr,
+                                   is_mem_defined_func, encoded_addrs, trace_fp);
+                cur_elt_addr += element_size;
+              }
+
+              VG_(fprintf)(trace_fp, "\n]}");
+            } else {
+              // total_array_size will be negative if -1 is in any array_dimensions
+              // due to not having a well-behaved bound
+              vg_assert(0); // unhandled
+            }
+            VG_(free)(array_dimensions);
+         } else {
+            vg_assert(0); // unhandled // no bounds!
+            //VG_(printf)("%s", "[??]");
+         }
+         break;
+      case Te_TyTyDef:
+         // typedef -- directly recurse into the typeR field
+         //VG_(printf)("typedef %s\n", ent->Te.TyTyDef.name ? ent->Te.TyTyDef.name : "<anonymous>" );
+         VG_(fprintf)(trace_fp,
+                      "{\"addr\":\"%p\", \"kind\":\"typedef\", \"type\":\"%s\", \"val\":\n  ",
+                      (void*)data_addr,
+                      ent->Te.TyTyDef.name ? ent->Te.TyTyDef.name : "<anonymous>");
+
+         ML_(pg_pp_varinfo)(tyents, ent->Te.TyTyDef.typeR, data_addr,
+                            is_mem_defined_func, encoded_addrs, trace_fp);
+
+         VG_(fprintf)(trace_fp, "}");
+         break;
+      case Te_TyFn:
+         vg_assert(0); // unhandled
+         //VG_(printf)("%s", "<function_type>");
+         break;
+      case Te_TyQual:
+         // PG - ignore qualifiers and traverse inward!
+         /*
+         switch (ent->Te.TyQual.qual) {
+            case 'C': VG_(printf)("const "); break;
+            case 'V': VG_(printf)("volatile "); break;
+            case 'R': VG_(printf)("restrict "); break;
+            default: goto unhandled;
+         }
+         */
+         ML_(pg_pp_varinfo)(tyents, ent->Te.TyQual.typeR, data_addr,
+                            is_mem_defined_func, encoded_addrs, trace_fp);
+         break;
+      case Te_UNKNOWN:
+         vg_assert(0); // unhandled
+         //ML_(pp_TyEnt)(ent);
+         break;
+      default:
+         goto unhandled;
+   }
+   return;
+
+  unhandled:
+   //VG_(printf)("pg_pp_varinfo:unhandled: ");
+   //ML_(pp_TyEnt)(ent);
    vg_assert(0);
 }
 

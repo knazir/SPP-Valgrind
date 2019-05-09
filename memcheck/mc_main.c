@@ -51,6 +51,9 @@
 #include "mc_include.h"
 #include "memcheck.h"   /* for client requests */
 
+#include "pub_tool_vki.h" // pgbovine
+#include "pub_tool_libcfile.h" // pgbovine
+
 
 /* Set to 1 to enable handwritten assembly helpers on targets for
    which it is supported. */
@@ -3738,15 +3741,6 @@ void MC_(helperc_MAKE_STACK_UNINIT) ( Addr base, UWord len, Addr nia )
 /*--- Checking memory                                      ---*/
 /*------------------------------------------------------------*/
 
-typedef 
-   enum {
-      MC_Ok = 5, 
-      MC_AddrErr = 6, 
-      MC_ValueErr = 7
-   } 
-   MC_ReadResult;
-
-
 /* Check permissions for address range.  If inadequate permissions
    exist, *bad_addr is set to the offending address, so the caller can
    know what it is. */
@@ -3792,7 +3786,8 @@ static Bool is_mem_addressable ( Addr a, SizeT len,
    return True;
 }
 
-static MC_ReadResult is_mem_defined ( Addr a, SizeT len,
+// pgbovine - made non-static
+MC_ReadResult is_mem_defined ( Addr a, SizeT len,
                                       /*OUT*/Addr* bad_addr,
                                       /*OUT*/UInt* otag )
 {
@@ -5695,7 +5690,7 @@ static Bool mc_expensive_sanity_check ( void )
 Bool          MC_(clo_partial_loads_ok)       = True;
 Long          MC_(clo_freelist_vol)           = 20*1000*1000LL;
 Long          MC_(clo_freelist_big_blocks)    =  1*1000*1000LL;
-LeakCheckMode MC_(clo_leak_check)             = LC_Summary;
+LeakCheckMode MC_(clo_leak_check)             = LC_Off; // pgbovine - disabled for speed; original: LC_Summary;
 VgRes         MC_(clo_leak_resolution)        = Vg_HighRes;
 UInt          MC_(clo_show_leak_kinds)        = R2S(Possible) | R2S(Unreached);
 UInt          MC_(clo_error_for_leak_kinds)   = R2S(Possible) | R2S(Unreached);
@@ -5716,6 +5711,11 @@ static const HChar * MC_(parse_leak_heuristics_tokens) =
 /* The first heuristic value (LchNone) has no keyword, as this is
    a fake heuristic used to collect the blocks found without any
    heuristic. */
+
+// pgbovine
+static Bool pg_source_filename_init = False;
+VgFile* trace_fp = NULL;
+int stdout_fd = 0;
 
 static Bool mc_process_cmd_line_options(const HChar* arg)
 {
@@ -5809,6 +5809,17 @@ static Bool mc_process_cmd_line_options(const HChar* arg)
                             MC_(clo_leak_resolution), Vg_MedRes) {}
    else if VG_XACT_CLO(arg, "--leak-resolution=high",
                             MC_(clo_leak_resolution), Vg_HighRes) {}
+
+   // pgbovine
+   else if VG_STR_CLO(arg, "--source-filename", tmp_str) {
+     VG_(strcpy)(pg_source_filename, tmp_str);
+     pg_source_filename_init = True;
+   }
+   else if VG_STR_CLO(arg, "--trace-filename", tmp_str) {
+     trace_fp = VG_(fopen)(tmp_str,
+                           VKI_O_CREAT|VKI_O_TRUNC|VKI_O_WRONLY, // otherwise it dont work right :(
+                           VKI_S_IRUSR|VKI_S_IWUSR /* u+rw */);
+   }
 
    else if VG_STR_CLO(arg, "--ignore-ranges", tmp_str) {
       Bool ok = parse_ignore_ranges(tmp_str);
@@ -7380,6 +7391,20 @@ static void ocache_sarp_Clear_Origins ( Addr a, UWord len ) {
 
 static void mc_post_clo_init ( void )
 {
+   tl_assert(pg_source_filename_init); // pgbovine -- requires this!
+   tl_assert(trace_fp); // pgbovine
+
+   // kinda gross hack. create a new file /tmp/stdout.txt in read/write
+   // mode and redirect stdout to it. MAKE SURE TO RUN VALGRIND PREPENDED
+   // WITH THE "stdbuf -o0" COMMAND SO THAT STDOUT IS NOT BUFFERED.
+   // otherwise this trick won't work because of file buffering.
+   // note that the user must have write permissions in /tmp
+   SysRes resW = VG_(open)("/tmp/stdout.txt",
+                          VKI_O_CREAT|VKI_O_RDWR|VKI_O_TRUNC,
+                          VKI_S_IRUSR|VKI_S_IWUSR|VKI_S_IRGRP|VKI_S_IROTH);
+   stdout_fd = sr_Res(resW);
+   VG_(dup2)(stdout_fd, 1); // close the user's stdout and redirect it to file
+
    /* If we've been asked to emit XML, mash around various other
       options so as to constrain the output somewhat. */
    if (VG_(clo_xml)) {
@@ -7618,6 +7643,9 @@ static void mc_print_stats (void)
 
 static void mc_fini ( Int exitcode )
 {
+   VG_(fclose)(trace_fp); // pgbovine - very important! TODO: what happens when program crashes?
+   VG_(close)(stdout_fd);
+
    MC_(print_malloc_stats)();
 
    if (MC_(clo_leak_check) != LC_Off) {
@@ -7730,6 +7758,9 @@ static void mc_pre_clo_init(void)
 
    VG_(needs_final_IR_tidy_pass)  ( MC_(final_tidy) );
 
+   // pgbovine -- http://valgrind.10908.n7.nabble.com/how-to-get-local-variable-name-from-data-address-td39979.html
+   // automatically activates --read-var-info=yes
+   VG_(needs_var_info)();
 
    VG_(needs_core_errors)         ();
    VG_(needs_tool_errors)         (MC_(eq_Error),
