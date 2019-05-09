@@ -525,8 +525,9 @@ void ML_(pg_pp_varinfo)( const XArray* /* of TyEnt */ tyents,
          }
 
          VG_(fprintf)(trace_fp,
-                      "{\"addr\":\"%p\", \"kind\":\"pointer\", \"size\":%u, \"val\":",
+                      "{\"addr\":\"%p\", \"kind\":\"%s\", \"size\":%u, \"val\":",
                       (void*)data_addr,
+                      ent->tag == Te_TyPtr ? "pointer" : "ref",
                       ent->Te.TyPorR.szB);
 
          // check whether this memory has been allocated and/or initialized
@@ -768,7 +769,7 @@ void ML_(pg_pp_varinfo)( const XArray* /* of TyEnt */ tyents,
          //            ent->Te.TyStOrUn.name ? ent->Te.TyStOrUn.name
          //                                  : "<anonymous>" );
          // TODO: handle unions later, let's just focus on structs for now
-         vg_assert(ent->Te.TyStOrUn.isStruct);
+         //vg_assert(ent->Te.TyStOrUn.isStruct);
 
          VG_(fprintf)(trace_fp,
                       "{\"addr\":\"%p\", \"kind\":\"struct\", \"type\":\"%s\", \"val\": {\n  ",
