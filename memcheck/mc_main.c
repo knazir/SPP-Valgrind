@@ -7402,15 +7402,18 @@ static void mc_post_clo_init ( void )
    // WITH THE "stdbuf -o0" COMMAND SO THAT STDOUT IS NOT BUFFERED.
    // otherwise this trick won't work because of file buffering.
    // note that the user must have write permissions in /tmp
-   // SysRes resW = VG_(open)("/tmp/stdout",
-   //                       VKI_O_CREAT|VKI_O_RDWR|VKI_O_TRUNC,
-   //                       VKI_S_IRUSR|VKI_S_IWUSR|VKI_S_IRGRP|VKI_S_IROTH);
-   // stdout_fd = sr_Res(resW);
+   //
+   // TODO: Permissions are messed up and docker can't seem to write to /tmp
+   //       or other directories, so write to a file in / instead.
+   SysRes resW = VG_(open)("/spp_stdout.txt",
+                         VKI_O_CREAT|VKI_O_RDWR|VKI_O_TRUNC,
+                         VKI_S_IRUSR|VKI_S_IWUSR|VKI_S_IRGRP|VKI_S_IROTH);
+   stdout_fd = sr_Res(resW);
 
-   HChar  buf[50];   // large enough
-   HChar  buf2[VG_(mkstemp_fullname_bufsz)(sizeof buf - 1)];
-   VG_(sprintf)(buf, "proc_%d_cmdline", VG_(getpid)());
-   stdout_fd = VG_(mkstemp)( buf, buf2 );
+   // HChar  buf[50];   // large enough
+   // HChar  buf2[VG_(mkstemp_fullname_bufsz)(sizeof buf - 1)];
+   // VG_(sprintf)(buf, "proc_%d_cmdline", VG_(getpid)());
+   // stdout_fd = VG_(mkstemp)( buf, buf2 );
 
    VG_(dup2)(stdout_fd, 1); // close the user's stdout and redirect it to file
 
