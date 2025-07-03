@@ -67,6 +67,8 @@
 
 #include "config.h"
 
+/* SPP STDOUT CAPTURE: Global file descriptor for capturing stdout */
+int spp_stdout_fd = -1;
 
 void ML_(guess_and_register_stack) (Addr sp, ThreadState* tst)
 {
@@ -4045,6 +4047,14 @@ PRE(sys_write)
    PRINT("sys_write ( %lu, %#lx, %lu )", ARG1, ARG2, ARG3);
    PRE_REG_READ3(ssize_t, "write",
                  unsigned int, fd, const char *, buf, vki_size_t, count);
+   
+   /* SPP STDOUT CAPTURE: If writing to stdout (fd=1), also write to our capture file */
+   extern int spp_stdout_fd;  // SPP stdout capture file descriptor
+   if (ARG1 == 1 && spp_stdout_fd >= 0 && ARG3 > 0) {
+      // Write the data to our stdout capture file
+      VG_(write)(spp_stdout_fd, (void*)ARG2, ARG3);
+   }
+   
    /* check to see if it is allowed.  If not, try for an exemption from
       --sim-hints=enable-outer (used for self hosting). */
    ok = ML_(fd_allowed)(ARG1, "write", tid, False);
@@ -4519,6 +4529,18 @@ PRE(sys_writev)
    PRE_REG_READ3(ssize_t, "writev",
                  unsigned long, fd, const struct iovec *, vector,
                  unsigned long, count);
+   
+   /* SPP STDOUT CAPTURE: If writing to stdout (fd=1), also write to our capture file */
+   extern int spp_stdout_fd;  // SPP stdout capture file descriptor
+   if (ARG1 == 1 && spp_stdout_fd >= 0 && ARG2 != 0 && (Int)ARG3 >= 0) {
+      vec = (struct vki_iovec *)ARG2;
+      for (i = 0; i < (Int)ARG3; i++) {
+         if (vec[i].iov_len > 0) {
+            VG_(write)(spp_stdout_fd, vec[i].iov_base, vec[i].iov_len);
+         }
+      }
+   }
+   
    if (!ML_(fd_allowed)(ARG1, "writev", tid, False)) {
       SET_STATUS_Failure( VKI_EBADF );
    } else {

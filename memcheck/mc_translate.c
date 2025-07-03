@@ -46,7 +46,7 @@
 #include "pub_tool_threadstate.h" // pgbovine
 #include "pub_tool_oset.h" // pgbovine
 extern VgFile* trace_fp; // pgbovine
-extern int stdout_fd; // pgbovine
+extern int spp_stdout_fd; // pgbovine
 static int n_steps = 0; // pgbovine
 const int MAX_STEPS = 5000; // pgbovine -- overbook a bit since the trace gets shortened in postprocessing anyhow
 
@@ -6287,7 +6287,7 @@ void pg_trace_inst(Addr a)
     if (n_steps > MAX_STEPS) {
       VG_(fprintf)(trace_fp, "MAX_STEPS_EXCEEDED\n");
       VG_(fclose)(trace_fp);
-      VG_(close)(stdout_fd);
+      VG_(close)(spp_stdout_fd);
       VG_(exit)(0);
     }
 
@@ -6296,8 +6296,8 @@ void pg_trace_inst(Addr a)
     // otherwise this trick won't work because of file buffering.
 
     // rewind to beginning and read as much as possible
-    VG_(lseek)(stdout_fd, 0, VKI_SEEK_SET);
-    int nbytes = VG_(read)(stdout_fd, user_stdout_buf, USER_STDOUT_BUF_SIZE);
+    VG_(lseek)(spp_stdout_fd, 0, VKI_SEEK_SET);
+    int nbytes = VG_(read)(spp_stdout_fd, user_stdout_buf, USER_STDOUT_BUF_SIZE);
     if (nbytes > 0) {
       user_stdout_buf[nbytes] = '\0';
     } else {

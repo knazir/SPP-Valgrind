@@ -5715,7 +5715,7 @@ static const HChar * MC_(parse_leak_heuristics_tokens) =
 // pgbovine
 static Bool pg_source_filename_init = False;
 VgFile* trace_fp = NULL;
-int stdout_fd = 0;
+extern int spp_stdout_fd;  // Defined in coregrind/m_syswrap/syswrap-generic.c
 
 static Bool mc_process_cmd_line_options(const HChar* arg)
 {
@@ -7405,17 +7405,23 @@ static void mc_post_clo_init ( void )
    //
    // TODO: Permissions are messed up and docker can't seem to write to /tmp
    //       or other directories, so write to a file in / instead.
+   // FIX: Instead of using dup2 (which fails in Docker), create a capture file
+   // and intercept writes to stdout (fd=1) to redirect them to our file.
+   // This approach works within Docker's security constraints.
    SysRes resW = VG_(open)("/spp_stdout.txt",
                          VKI_O_CREAT|VKI_O_RDWR|VKI_O_TRUNC,
                          VKI_S_IRUSR|VKI_S_IWUSR|VKI_S_IRGRP|VKI_S_IROTH);
-   stdout_fd = sr_Res(resW);
+   
+   if (!sr_isError(resW)) {
+      spp_stdout_fd = sr_Res(resW);
+   } else {
+      // Fallback: if we can't create the file, set spp_stdout_fd to -1
+      // This will result in empty stdout capture but won't crash Valgrind
+      spp_stdout_fd = -1;
+   }
 
-   // HChar  buf[50];   // large enough
-   // HChar  buf2[VG_(mkstemp_fullname_bufsz)(sizeof buf - 1)];
-   // VG_(sprintf)(buf, "proc_%d_cmdline", VG_(getpid)());
-   // stdout_fd = VG_(mkstemp)( buf, buf2 );
-
-   VG_(dup2)(stdout_fd, 1); // close the user's stdout and redirect it to file
+   // NOTE: Removed dup2 approach as it fails in Docker.
+   // Instead, we'll intercept write syscalls to stdout in the syscall wrapper.
 
    /* If we've been asked to emit XML, mash around various other
       options so as to constrain the output somewhat. */
@@ -7656,7 +7662,7 @@ static void mc_print_stats (void)
 static void mc_fini ( Int exitcode )
 {
    VG_(fclose)(trace_fp); // pgbovine - very important! TODO: what happens when program crashes?
-   VG_(close)(stdout_fd);
+   VG_(close)(spp_stdout_fd);
 
    MC_(print_malloc_stats)();
 
