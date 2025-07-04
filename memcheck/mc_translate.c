@@ -40,6 +40,16 @@
 #include "pub_tool_mallocfree.h"
 #include "pub_tool_libcbase.h"
 
+#include "pub_tool_libcfile.h" // pgbovine
+#include "pub_tool_debuginfo.h" // pgbovine
+#include "pub_tool_stacktrace.h" // pgbovine
+#include "pub_tool_threadstate.h" // pgbovine
+#include "pub_tool_oset.h" // pgbovine
+extern VgFile* trace_fp; // pgbovine
+extern int stdout_fd; // pgbovine
+static int n_steps = 0; // pgbovine
+const int MAX_STEPS = 5000; // pgbovine -- overbook a bit since the trace gets shortened in postprocessing anyhow
+
 #include "mc_include.h"
 
 
@@ -6248,6 +6258,306 @@ static Bool checkForBogusLiterals ( /*FLAT*/ IRStmt* st )
 }
 
 
+// pgbovine
+VG_REGPARM(1) void pg_trace_inst(Addr ad);
+
+// any addresses whose values have already been encoded FOR THIS STEP!
+// (remember to reset between steps)
+OSet* pg_encoded_addrs = NULL;
+#define USER_STDOUT_BUF_SIZE 10 * 1024 * 1024
+char user_stdout_buf[USER_STDOUT_BUF_SIZE]; // TODO: make this bigger?
+
+VG_REGPARM(1)
+void pg_trace_inst(Addr a)
+{
+  // adapted from ../coregrind/m_addrinfo.c
+  const HChar *file;
+  Bool hasfile = VG_(get_filename)(a, &file);
+
+  // only trace instructions in pg_source_filename, which was
+  // initialized with the --source-filename option
+  if (hasfile && VG_STREQ(file, pg_source_filename)) {
+    tl_assert(!pg_encoded_addrs); // should have been reset
+    pg_encoded_addrs = VG_(OSetWord_Create)(VG_(malloc),
+                                            "pg_encoded_addrs",
+                                            VG_(free));
+
+    // bail if necessary!
+    n_steps++;
+    if (n_steps > MAX_STEPS) {
+      VG_(fprintf)(trace_fp, "MAX_STEPS_EXCEEDED\n");
+      VG_(fclose)(trace_fp);
+      VG_(close)(stdout_fd);
+      VG_(exit)(0);
+    }
+
+    // MAKE SURE TO RUN VALGRIND PREPENDED
+    // WITH THE "stdbuf -o0" COMMAND SO THAT STDOUT IS NOT BUFFERED.
+    // otherwise this trick won't work because of file buffering.
+
+    // rewind to beginning and read as much as possible
+    VG_(lseek)(stdout_fd, 0, VKI_SEEK_SET);
+    int nbytes = VG_(read)(stdout_fd, user_stdout_buf, USER_STDOUT_BUF_SIZE);
+    if (nbytes > 0) {
+      user_stdout_buf[nbytes] = '\0';
+    } else {
+      user_stdout_buf[0] = '\0';
+    }
+    //VG_(printf)("pg_trace_inst value: %d, %s\n", nbytes, user_stdout_buf);
+    char* json_buf = json_encode_string(user_stdout_buf);
+
+
+    VG_(fprintf)(trace_fp, "=== pg_trace_inst ===\n");
+
+    // start by printing out current stdout as a JSON string in one line
+    VG_(fprintf)(trace_fp, "STDOUT: %s\n", json_buf);
+    VG_(free)(json_buf);
+
+    VG_(fprintf)(trace_fp, "{\n");
+
+    Vg_FnNameKind kind = VG_(get_fnname_kind_from_IP)(a);
+    const HChar *fn;
+    Bool hasfn = VG_(get_fnname)(a, &fn);
+    UInt linenum;
+    Bool haslinenum = VG_(get_linenum)(a, &linenum);
+    //VG_(printf)("pg_trace_inst %p %s %s (%u) - Kind: %d\n",
+    //            (void*)a,
+    //            hasfile ? file : "???",
+    //            hasfn ? fn : "???",
+    //            haslinenum ? linenum : -999,
+    //            (int)kind);
+
+    VG_(fprintf)(trace_fp,
+                "\"func_name\": \"%s\", \"line\": %d, \"IP\": \"%p\", \"kind\": %d, ",
+                hasfn ? fn : "???",
+                haslinenum ? linenum : -999,
+                (void*)a,
+                (int)kind);
+
+    Addr ips[100];
+    Addr sps[100];
+    Addr fps[100];
+    UInt stack_depth = VG_(get_StackTrace)(VG_(get_running_tid)(),
+                                           ips, 100 /* max stack depth */,
+                                           sps,
+                                           fps,
+                                           0);
+
+    tl_assert(stack_depth > 0);
+
+    Addr top_ip = ips[0];
+
+    // traverse globals
+    // adapted from exp-sgcheck/sg_main.c acquire_globals()
+    UWord di_handle = pg_get_di_handle_at_ip(top_ip);
+
+    XArray* /* of GlobalBlock */ gbs = NULL;
+    GlobalBlock** index_of_possible_static_var = NULL; // points to elements within gbs, so free together with it
+    Bool* static_var_in_frame = NULL;
+
+    Word i;
+    Bool first_elt = True;
+    if (di_handle) { // sometimes it's mysteriously null
+      gbs = VG_(di_get_global_blocks_from_dihandle)(di_handle, False);
+      Word n = VG_(sizeXA)( gbs );
+
+      index_of_possible_static_var = (GlobalBlock**)VG_(malloc)("index_of_possible_static_var", n * sizeof(*index_of_possible_static_var));
+      static_var_in_frame = (Bool**)VG_(malloc)("static_var_in_frame", n * sizeof(*static_var_in_frame));
+      VG_(fprintf)(trace_fp, "\n\"globals\": {");
+      for (i = 0; i < n; i++) {
+        index_of_possible_static_var[i] = NULL;
+
+        GlobalBlock* gb = VG_(indexXA)( gbs, i );
+        tl_assert(gb->szB > 0);
+
+        Bool res = VG_(pg_traverse_global_var)(gb->fullname, gb->addr, is_mem_defined, pg_encoded_addrs, !first_elt, trace_fp);
+        if (!res) {
+          // pgbovine: res != True for static vars defined inside of functions
+          //
+          // small example:
+          //
+          // int main() {
+          //   static int x = 0;
+          // }
+
+          // mark this as a possible static variable to traverse when
+          // we're traversing stack frames later
+          index_of_possible_static_var[i] = gb;
+        } else {
+          tl_assert(res); // common case, we really found the global!
+        }
+
+        if (!index_of_possible_static_var[i] && first_elt) {
+          first_elt = False;
+        }
+      }
+      VG_(fprintf)(trace_fp, "},\n");
+
+      // print out an ordered list of globals since object keys have no order
+      VG_(fprintf)(trace_fp, "\"ordered_globals\": [");
+      first_elt = True;
+      for (i = 0; i < n; i++) {
+        // do this as the very first thing in the loop ...
+        if (index_of_possible_static_var[i]) {
+          continue;
+        }
+
+        GlobalBlock* gb = VG_(indexXA)( gbs, i );
+        tl_assert(gb->szB > 0);
+
+        if (first_elt) {
+          first_elt = False;
+        } else {
+          VG_(fprintf)(trace_fp, ",");
+        }
+        VG_(fprintf)(trace_fp, "\"%s\"", gb->fullname);
+      }
+      VG_(fprintf)(trace_fp, "],\n");
+    }
+
+    VG_(fprintf)(trace_fp, "\"stack\": [\n");
+    Bool first_stack_entry = True;
+    for (i = 0; i < stack_depth; i++) {
+      Addr cur_ip = ips[i];
+      Addr cur_sp = sps[i];
+      Addr cur_fp = fps[i];
+      Vg_FnNameKind ip_kind = VG_(get_fnname_kind_from_IP)(cur_ip);
+      // as soon as you're on the first entry below main, break outta here!
+      if (ip_kind == Vg_FnNameBelowMain) {
+        break;
+      }
+
+
+      if (first_stack_entry) {
+        first_stack_entry = False;
+      } else {
+        VG_(fprintf)(trace_fp, ",\n");
+      }
+
+      VG_(fprintf)(trace_fp, "{");
+
+      const HChar *cur_fn;
+      Bool cur_hasfn = VG_(get_fnname)(cur_ip, &cur_fn);
+      UInt cur_linenum;
+      Bool cur_haslinenum = VG_(get_linenum)(cur_ip, &cur_linenum);
+
+      VG_(fprintf)(trace_fp,
+                  "\"func_name\":\"%s\", \"line\": %d, \"SP\": \"%p\",  \"FP\": \"%p\"",
+                  cur_hasfn ? cur_fn : "???",
+                  cur_haslinenum ? cur_linenum : -999,
+                  (void*)cur_sp, (void*)cur_fp);
+
+      // stack blocks
+      XArray* blocks = VG_(di_get_stack_blocks_at_ip)(cur_ip, False);
+      if (blocks) {
+        VG_(fprintf)(trace_fp, ", \"locals\": {\n");
+        first_elt = True;
+        int j;
+        for (j = 0; j < VG_(sizeXA)(blocks); j++) {
+          StackBlock* sb = VG_(indexXA)(blocks, j);
+          Addr var_addr = sb->spRel ? cur_sp + sb->base : cur_fp + sb->base;
+          //VG_(printf)("  sb %d: %s | base: %d, szB: %d, spRel: %d, isVec: %d | %p\n", j, sb->name,
+          //            sb->base, sb->szB, sb->spRel, sb->isVec,
+          //            (void*)var_addr);
+          bool res = VG_(pg_traverse_local_var)(sb->fullname, var_addr, cur_ip, cur_sp, cur_fp,
+                                                False, /* is_static=False; it's a regular local var, not a static one */
+                                                is_mem_defined, pg_encoded_addrs, !first_elt, trace_fp);
+          tl_assert(res);
+
+          if (first_elt) {
+            first_elt = False;
+          }
+        }
+
+        // loop through all global variables to see if any of them are
+        // actually static variables declared in THIS frame (ugh #tricky)
+        if (index_of_possible_static_var) {
+          Word n = VG_(sizeXA)( gbs );
+          // clear first
+          for (j = 0; j < n; j++) {
+            static_var_in_frame[j] = False;
+          }
+
+          for (j = 0; j < n; j++) {
+            GlobalBlock* gb = index_of_possible_static_var[j];
+            if (gb) {
+              bool res = VG_(pg_traverse_local_var)(gb->fullname, gb->addr, cur_ip, cur_sp, cur_fp,
+                                                    True, // is_static=True; YES this is a static var declared within a function
+                                                    is_mem_defined, pg_encoded_addrs, !first_elt, trace_fp);
+              if (res) {
+                static_var_in_frame[j] = True;
+                if (first_elt) {
+                  first_elt = False;
+                }
+              }
+            }
+          }
+        }
+
+        VG_(fprintf)(trace_fp, "}");
+
+        // print out an ordered list of locals since object keys have no order
+        VG_(fprintf)(trace_fp, ",\n\"ordered_varnames\": [");
+        first_elt = True;
+        for (j = 0; j < VG_(sizeXA)(blocks); j++) {
+          StackBlock* sb = VG_(indexXA)(blocks, j);
+          if (first_elt) {
+            first_elt = False;
+          } else {
+            VG_(fprintf)(trace_fp, ",");
+          }
+          VG_(fprintf)(trace_fp, "\"%s\"", sb->fullname);
+        }
+
+        // print static vars in ordered_varnames to match 'locals'
+        if (index_of_possible_static_var) {
+          Word n = VG_(sizeXA)( gbs );
+          for (j = 0; j < n; j++) {
+            if (static_var_in_frame[j]) {
+              GlobalBlock* gb = index_of_possible_static_var[j];
+              tl_assert(gb);
+
+              if (first_elt) {
+                first_elt = False;
+              } else {
+                VG_(fprintf)(trace_fp, ",");
+              }
+              // must match exact wording in VG_(pg_traverse_local_var)
+              VG_(fprintf)(trace_fp, "\"%s (static %p)\"", gb->fullname, gb->addr);
+            }
+          }
+        }
+
+        VG_(fprintf)(trace_fp, "]");
+
+        VG_(deleteXA)(blocks);
+      }
+
+      VG_(fprintf)(trace_fp, "}");
+    }
+    VG_(fprintf)(trace_fp, "]\n");
+
+    // delete these all at the end since we may need it to print out
+    // static vars within stack frames
+    if (gbs) {
+      VG_(deleteXA)( gbs );
+    }
+    if (index_of_possible_static_var) {
+      VG_(free)(index_of_possible_static_var);
+    }
+    if (static_var_in_frame) {
+      VG_(free)(static_var_in_frame);
+    }
+
+    // reset this after every execution step so that we can re-encode
+    // the same blocks at the next step
+    VG_(OSetWord_Destroy)(pg_encoded_addrs);
+    pg_encoded_addrs = NULL;
+
+    VG_(fprintf)(trace_fp, "}\n");
+  }
+}
+
 IRSB* MC_(instrument) ( VgCallbackClosure* closure,
                         IRSB* sb_in, 
                         const VexGuestLayout* layout, 
@@ -6430,6 +6740,8 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
             schemeS( &mce, st );
       }
 
+      IRDirty *di; // pgbovine
+
       /* Generate instrumentation code for each stmt ... */
 
       switch (st->tag) {
@@ -6471,6 +6783,15 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
             break;
 
          case Ist_IMark:
+            // pgbovine -- from fjalar
+            di = unsafeIRDirty_0_N(1/*regparms*/,
+                 "pg_trace_inst",
+                 &pg_trace_inst,
+                 mkIRExprVec_1(IRExpr_Const(IRConst_U64(st->Ist.IMark.addr))));
+            // TODO: need to mark what parts the dirty instruction might access
+            // so that Valgrind doesn't optimize code away or something?!?
+            stmt('V', &mce, IRStmt_Dirty(di));
+            // END pgbovine
             break;
 
          case Ist_NoOp:
@@ -6548,6 +6869,24 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
       }
       VG_(printf)("\n");
    }
+
+   // pgbovine - from fjalar (maybe not needed for us)
+   // The IRBB itself may contain a Ret
+   // (return) as its end-of-block jump.  If so, then this is possibly
+   // a cue for a function exit.  This is very important for detecting
+   // function exits!
+   //handle_possible_exit( &mce, sb_out->jumpkind );
+   //if (Ijk_Ret == sb_out->jumpkind) {
+   //  IRDirty  *di;
+   //  // pgbovine -- from fjalar
+   //  di = unsafeIRDirty_0_N(1/*regparms*/,
+   //       "pg_trace_inst",
+   //       &pg_trace_inst,
+   //      mkIRExprVec_1(IRExpr_Const(IRConst_U64(st->Ist.IMark.addr))));
+   // TODO: need to mark where the dirty instruction might
+   // access
+   //  stmt('V', &mce, IRStmt_Dirty(di));
+   //}
 
    /* If this fails, there's been some serious snafu with tmp management,
       that should be investigated. */
