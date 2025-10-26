@@ -5301,217 +5301,6 @@ static Bool data_address_is_in_var ( /*OUT*/PtrdiffT* offset,
    }
 }
 
-/* pgbovine - Variable traversal functions for trace generation */
-Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
-                                 Addr ip, Addr sp, Addr fp,
-                                 Bool is_static, /* True if this is a static var declared within a function */
-                                 int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
-                                 OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp)
-{
-   Word       i;
-   DebugInfo* di;
-   RegSummary regs;
-   Bool debug = False;
-
-   static UInt n_search = 0;
-   static UInt n_steps = 0;
-   n_search++;
-   if (debug)
-      VG_(printf)("QQQQ: cvif: ip,sp,fp %#lx,%#lx,%#lx\n", ip,sp,fp);
-   /* first, find the DebugInfo that pertains to 'ip'. */
-   for (di = debugInfo_list; di; di = di->next) {
-      n_steps++;
-      /* text segment missing? unlikely, but handle it .. */
-      if (!di->text_present || di->text_size == 0)
-         continue;
-      /* Ok.  So does this text mapping bracket the ip? */
-      if (di->text_avma <= ip && ip < di->text_avma + di->text_size)
-         break;
-   }
-
-   /* Didn't find it.  Strange -- means ip is a code address outside
-      of any mapped text segment.  Unlikely but not impossible -- app
-      could be generating code to run. */
-   if (!di)
-      return False;
-
-   if (0 && ((n_search & 0x1) == 0))
-      VG_(printf)("consider_vars_in_frame: %u searches, "
-                  "%u DebugInfos looked at\n",
-                  n_search, n_steps);
-   /* Start of performance-enhancing hack: once every ??? (chosen
-      hackily after profiling) successful searches, move the found
-      DebugInfo one step closer to the start of the list.  This makes
-      future searches cheaper. */
-   if ((n_search & 0xFFFF) == 0) {
-      /* Move si one step closer to the start of the list. */
-      move_DebugInfo_one_step_forward( di );
-   }
-   /* End of performance-enhancing hack. */
-
-   /* any var info at all? */
-   if (!di->varinfo)
-      return False;
-
-   /* Work through the scopes from most deeply nested outwards,
-      looking for code address ranges that bracket 'ip'.  The
-      variables on each such address range found are in scope right
-      now.  Don't descend to level zero as that is the global
-      scope. */
-   regs.ip = ip;
-   regs.sp = sp;
-   regs.fp = fp;
-
-   /* "for each scope, working outwards ..." */
-   for (i = VG_(sizeXA)(di->varinfo) - 1; i >= 1; i--) {
-      XArray*      vars;
-      Word         j;
-      DiAddrRange* arange;
-      OSet*        this_scope
-         = *(OSet**)VG_(indexXA)( di->varinfo, i );
-      if (debug)
-         VG_(printf)("QQQQ:   considering scope %ld\n", (Word)i);
-      if (!this_scope)
-         continue;
-      /* Find the set of variables in this scope that
-         bracket the program counter. */
-      arange = VG_(OSetGen_LookupWithCmp)(
-                  this_scope, &ip,
-                  ML_(cmp_for_DiAddrRange_range)
-               );
-      if (!arange)
-         continue;
-      /* stay sane */
-      vg_assert(arange->aMin <= arange->aMax);
-      /* It must bracket the ip we asked for, else
-         ML_(cmp_for_DiAddrRange_range) is somehow broken. */
-      vg_assert(arange->aMin <= ip && ip <= arange->aMax);
-      /* It must have an attached XArray of DiVariables. */
-      vars = arange->vars;
-      vg_assert(vars);
-      /* But it mustn't cover the entire address range.  We only
-         expect that to happen for the global scope (level 0), which
-         we're not looking at here.  Except, it may cover the entire
-         address range, but in that case the vars array must be
-         empty. */
-      vg_assert(! (arange->aMin == (Addr)0
-                   && arange->aMax == ~(Addr)0
-                   && VG_(sizeXA)(vars) > 0) );
-      for (j = 0; j < VG_(sizeXA)( vars ); j++) {
-         DiVariable* var = (DiVariable*)VG_(indexXA)( vars, j );
-         PtrdiffT    offset;
-         if (debug)
-            VG_(printf)("QQQQ:    var:name=%s %#lx-%#lx %#lx\n",
-                        var->name,arange->aMin,arange->aMax,ip);
-         if (data_address_is_in_var( &offset, di->admin_tyents,
-                                     var,
-                                     // super tricky! if is_static, then don't
-                                     // pass anything as RegSummary, which will
-                                     // force a lookup in GLOBAL scope, which is
-                                     // correct since static vars are 'global' (#tricky)
-                                     is_static ? NULL : &regs,
-                                     data_addr, di )) {
-            // pgbovine
-            if (prefix_with_comma) { // only do this on a successful print!
-              VG_(fprintf)(trace_fp, ",");
-            }
-
-            if (is_static) {
-              VG_(fprintf)(trace_fp, "  \"%s (static %p)\": ", varname, data_addr);
-            } else {
-              VG_(fprintf)(trace_fp, "  \"%s\": ", varname);
-            }
-            ML_(pg_pp_varinfo)(di->first_epoch, di->admin_tyents, var->typeR, data_addr,
-                               is_mem_defined_func, encoded_addrs, trace_fp);
-            VG_(fprintf)(trace_fp, "\n");
-
-            return True;
-         }
-      }
-   }
-
-   return False;
-}
-
-Bool VG_(pg_traverse_global_var)(const HChar* varname, Addr data_addr,
-                                 int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
-                                 OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp) {
-  // adapted from VG_(get_data_description)
-
-  /* First, see if data_addr is (or is part of) a global variable.
-     Loop over the DebugInfos we have.  Check data_addr against the
-     outermost scope of all of them, as that should be a global
-     scope. */
-  for (DebugInfo* di = debugInfo_list; di != NULL; di = di->next) {
-    OSet*        global_scope;
-    Word         gs_size;
-    Addr         zero;
-    DiAddrRange* global_arange;
-    Word         i;
-    XArray*      vars;
-
-    /* text segment missing? unlikely, but handle it .. */
-    if (!di->text_present || di->text_size == 0)
-      continue;
-    /* any var info at all? */
-    if (!di->varinfo)
-      continue;
-    /* perhaps this object didn't contribute any vars at all? */
-    if (VG_(sizeXA)( di->varinfo ) == 0)
-      continue;
-    global_scope = *(OSet**)VG_(indexXA)( di->varinfo, 0 );
-    vg_assert(global_scope);
-    gs_size = VG_(OSetGen_Size)( global_scope );
-    /* The global scope might be completely empty if this
-       compilation unit declared locals but nothing global. */
-    if (gs_size == 0)
-      continue;
-    /* But if it isn't empty, then it must contain exactly one
-       element, which covers the entire address range. */
-    vg_assert(gs_size == 1);
-    /* Fish out the global scope and check it is as expected. */
-    zero = 0;
-    global_arange = VG_(OSetGen_Lookup)( global_scope, &zero );
-    /* The global range from (Addr)0 to ~(Addr)0 must exist */
-    vg_assert(global_arange);
-    vg_assert(global_arange->aMin == (Addr)0
-              && global_arange->aMax == ~(Addr)0);
-    /* Any vars in this range? */
-    if (!global_arange->vars)
-      continue;
-    /* Ok, there are some vars in the global scope of this
-       DebugInfo.  Wade through them and see if the data addresses
-       of any of them bracket data_addr. */
-    vars = global_arange->vars;
-    for (i = 0; i < VG_(sizeXA)( vars ); i++) {
-      PtrdiffT offset;
-      DiVariable* var = (DiVariable*)VG_(indexXA)( vars, i );
-      vg_assert(var->name);
-      /* Note we use a NULL RegSummary* here.  It can't make any
-         sense for a global variable to have a location expression
-         which depends on a SP/FP/IP value.  So don't supply any.
-         This means, if the evaluation of the location
-         expression/list requires a register, we have to let it
-         fail. */
-      if (data_address_is_in_var( &offset, di->admin_tyents, var,
-                                  NULL/* RegSummary* */,
-                                  data_addr, di )) {
-        if (prefix_with_comma) { // only do this on a successful print!
-          VG_(fprintf)(trace_fp, ",");
-        }
-        VG_(fprintf)(trace_fp, "  \"%s\": ", varname);
-        ML_(pg_pp_varinfo)(di->first_epoch, di->admin_tyents, var->typeR, data_addr,
-                           is_mem_defined_func, encoded_addrs, trace_fp);
-        VG_(fprintf)(trace_fp, "\n");
-
-        return True;
-      }
-    }
-  }
-
-  return False;
-}
-
 
 /* Format the acquired information into DN(AME)1 and DN(AME)2, which
    are XArray*s of HChar, that have been initialised by the caller.
@@ -6823,3 +6612,217 @@ SizeT VG_(data_size)(void)
 /*--------------------------------------------------------------------*/
 /*--- end                                                          ---*/
 /*--------------------------------------------------------------------*/
+
+/* pgbovine - Traverse local variable and output to trace file */
+Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
+                                 Addr ip, Addr sp, Addr fp,
+                                 Bool is_static, /* True if this is a static var declared within a function */
+                                 int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
+                                 OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp)
+{
+   Word       i;
+   DebugInfo* di;
+   RegSummary regs;
+   Bool debug = False;
+
+   static UInt n_search = 0;
+   static UInt n_steps = 0;
+   n_search++;
+   if (debug)
+      VG_(printf)("QQQQ: cvif: ip,sp,fp %#lx,%#lx,%#lx\n", ip,sp,fp);
+   /* first, find the DebugInfo that pertains to 'ip'. */
+   for (di = debugInfo_list; di; di = di->next) {
+      n_steps++;
+      /* text segment missing? unlikely, but handle it .. */
+      if (!di->text_present || di->text_size == 0)
+         continue;
+      /* Ok.  So does this text mapping bracket the ip? */
+      if (di->text_avma <= ip && ip < di->text_avma + di->text_size)
+         break;
+   }
+ 
+   /* Didn't find it.  Strange -- means ip is a code address outside
+      of any mapped text segment.  Unlikely but not impossible -- app
+      could be generating code to run. */
+   if (!di)
+      return False;
+
+   if (0 && ((n_search & 0x1) == 0))
+      VG_(printf)("consider_vars_in_frame: %u searches, "
+                  "%u DebugInfos looked at\n", 
+                  n_search, n_steps);
+   /* Start of performance-enhancing hack: once every ??? (chosen
+      hackily after profiling) successful searches, move the found
+      DebugInfo one step closer to the start of the list.  This makes
+      future searches cheaper. */
+   if ((n_search & 0xFFFF) == 0) {
+      /* Move si one step closer to the start of the list. */
+      move_DebugInfo_one_step_forward( di );
+   }
+   /* End of performance-enhancing hack. */
+
+   /* any var info at all? */
+   if (!di->varinfo)
+      return False;
+
+   /* Work through the scopes from most deeply nested outwards,
+      looking for code address ranges that bracket 'ip'.  The
+      variables on each such address range found are in scope right
+      now.  Don't descend to level zero as that is the global
+      scope. */
+   regs.ip = ip;
+   regs.sp = sp;
+   regs.fp = fp;
+
+   /* "for each scope, working outwards ..." */
+   for (i = VG_(sizeXA)(di->varinfo) - 1; i >= 1; i--) {
+      XArray*      vars;
+      Word         j;
+      DiAddrRange* arange;
+      OSet*        this_scope 
+         = *(OSet**)VG_(indexXA)( di->varinfo, i );
+      if (debug)
+         VG_(printf)("QQQQ:   considering scope %ld\n", (Word)i);
+      if (!this_scope)
+         continue;
+      /* Find the set of variables in this scope that
+         bracket the program counter. */
+      arange = VG_(OSetGen_LookupWithCmp)(
+                  this_scope, &ip, 
+                  ML_(cmp_for_DiAddrRange_range)
+               );
+      if (!arange)
+         continue;
+      /* stay sane */
+      vg_assert(arange->aMin <= arange->aMax);
+      /* It must bracket the ip we asked for, else
+         ML_(cmp_for_DiAddrRange_range) is somehow broken. */
+      vg_assert(arange->aMin <= ip && ip <= arange->aMax);
+      /* It must have an attached XArray of DiVariables. */
+      vars = arange->vars;
+      vg_assert(vars);
+      /* But it mustn't cover the entire address range.  We only
+         expect that to happen for the global scope (level 0), which
+         we're not looking at here.  Except, it may cover the entire
+         address range, but in that case the vars array must be
+         empty. */
+      vg_assert(! (arange->aMin == (Addr)0
+                   && arange->aMax == ~(Addr)0
+                   && VG_(sizeXA)(vars) > 0) );
+      for (j = 0; j < VG_(sizeXA)( vars ); j++) {
+         DiVariable* var = (DiVariable*)VG_(indexXA)( vars, j );
+         PtrdiffT    offset;
+         if (debug)
+            VG_(printf)("QQQQ:    var:name=%s %#lx-%#lx %#lx\n",
+                        var->name,arange->aMin,arange->aMax,ip);
+         if (data_address_is_in_var( &offset, di->admin_tyents,
+                                     var,
+                                     // super tricky! if is_static, then don't
+                                     // pass anything as RegSummary, which will
+                                     // force a lookup in GLOBAL scope, which is
+                                     // correct since static vars are 'global' (#tricky)
+                                     is_static ? NULL : &regs,
+                                     data_addr, di )) {
+            // pgbovine
+            if (prefix_with_comma) { // only do this on a successful print!
+              VG_(fprintf)(trace_fp, ",");
+            }
+
+            if (is_static) {
+              VG_(fprintf)(trace_fp, "  \"%s (static %p)\": ", varname, data_addr);
+            } else {
+              VG_(fprintf)(trace_fp, "  \"%s\": ", varname);
+            }
+            DiEpoch ep = VG_(current_DiEpoch)();
+            ML_(pg_pp_varinfo)(ep, di->admin_tyents, var->typeR, data_addr,
+                               is_mem_defined_func, encoded_addrs, trace_fp);
+            VG_(fprintf)(trace_fp, "\n");
+
+            return True;
+         }
+      }
+   }
+
+   return False;
+}
+
+/* pgbovine - Traverse global variable and output to trace file */
+Bool VG_(pg_traverse_global_var)(const HChar* varname, Addr data_addr,
+                                 int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
+                                 OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp) {
+  // adapted from VG_(get_data_description)
+
+  /* First, see if data_addr is (or is part of) a global variable.
+     Loop over the DebugInfos we have.  Check data_addr against the
+     outermost scope of all of them, as that should be a global
+     scope. */
+  for (DebugInfo* di = debugInfo_list; di != NULL; di = di->next) {
+    OSet*        global_scope;
+    Word         gs_size;
+    Addr         zero;
+    DiAddrRange* global_arange;
+    Word         i;
+    XArray*      vars;
+
+    /* text segment missing? unlikely, but handle it .. */
+    if (!di->text_present || di->text_size == 0)
+      continue;
+    /* any var info at all? */
+    if (!di->varinfo)
+      continue;
+    /* perhaps this object didn't contribute any vars at all? */
+    if (VG_(sizeXA)( di->varinfo ) == 0)
+      continue;
+    global_scope = *(OSet**)VG_(indexXA)( di->varinfo, 0 );
+    vg_assert(global_scope);
+    gs_size = VG_(OSetGen_Size)( global_scope );
+    /* The global scope might be completely empty if this
+       compilation unit declared locals but nothing global. */
+    if (gs_size == 0)
+      continue;
+    /* But if it isn't empty, then it must contain exactly one
+       element, which covers the entire address range. */
+    vg_assert(gs_size == 1);
+    /* Fish out the global scope and check it is as expected. */
+    zero = 0;
+    global_arange = VG_(OSetGen_Lookup)( global_scope, &zero );
+    /* The global range from (Addr)0 to ~(Addr)0 must exist */
+    vg_assert(global_arange);
+    vg_assert(global_arange->aMin == (Addr)0
+              && global_arange->aMax == ~(Addr)0);
+    /* Any vars in this range? */
+    if (!global_arange->vars)
+      continue;
+    /* Ok, there are some vars in the global scope of this
+       DebugInfo.  Wade through them and see if the data addresses
+       of any of them bracket data_addr. */
+    vars = global_arange->vars;
+    for (i = 0; i < VG_(sizeXA)( vars ); i++) {
+      PtrdiffT offset;
+      DiVariable* var = (DiVariable*)VG_(indexXA)( vars, i );
+      vg_assert(var->name);
+      /* Note we use a NULL RegSummary* here.  It can't make any
+         sense for a global variable to have a location expression
+         which depends on a SP/FP/IP value.  So don't supply any.
+         This means, if the evaluation of the location
+         expression/list requires a register, we have to let it
+         fail. */
+      if (data_address_is_in_var( &offset, di->admin_tyents, var,
+                                  NULL/* RegSummary* */,
+                                  data_addr, di )) {
+        if (prefix_with_comma) { // only do this on a successful print!
+          VG_(fprintf)(trace_fp, ",");
+        }
+        VG_(fprintf)(trace_fp, "  \"%s\": ", varname);
+        DiEpoch ep = VG_(current_DiEpoch)();
+        ML_(pg_pp_varinfo)(ep, di->admin_tyents, var->typeR, data_addr,
+                           is_mem_defined_func, encoded_addrs, trace_fp);
+        VG_(fprintf)(trace_fp, "\n");
+
+        return True;
+      }
+    }
+  }
+
+  return False;
+}

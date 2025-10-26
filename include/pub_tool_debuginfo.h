@@ -238,6 +238,17 @@ VG_(di_get_stack_blocks_at_ip)( Addr ip, Bool arrays_only );
 /* pgbovine - Get debug info handle at given instruction pointer */
 UWord pg_get_di_handle_at_ip(Addr ip);
 
+/* pgbovine - variable traversal functions for trace generation */
+Bool VG_(pg_traverse_global_var)(const HChar* varname, Addr data_addr,
+                                 int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
+                                 OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp);
+
+Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
+                                 Addr ip, Addr sp, Addr fp,
+                                 Bool is_static, /* True if this is a static var declared within a function */
+                                 int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
+                                 OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp);
+
 /* Get an array of GlobalBlock which describe the global blocks owned
    by the shared object characterised by the given di_handle.  Asserts
    if the handle is invalid.  The caller is responsible for freeing
