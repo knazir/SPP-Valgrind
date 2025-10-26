@@ -419,7 +419,7 @@ static OSet* auxmap_L2 = NULL;
 HChar pg_source_filename[1000];  /* definition (declared extern in mc_include.h) */
 static Bool pg_source_filename_init = False;
 VgFile* trace_fp = NULL;
-int stdout_fd = 0;
+int stdout_fd = 1;  /* File descriptor 1 is stdout, which should be redirected to a file */
 
 static void init_auxmap_L1_L2 ( void )
 {
