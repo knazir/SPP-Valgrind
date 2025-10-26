@@ -37,8 +37,34 @@
 #include "pub_tool_xarray.h"
 #include "pub_tool_mallocfree.h"
 #include "pub_tool_libcbase.h"
+#include "pub_tool_libcfile.h"     /* pgbovine - VgFile for trace output */
+#include "pub_tool_debuginfo.h"    /* pgbovine - debug info traversal */
+#include "pub_tool_stacktrace.h"   /* pgbovine - VG_(get_StackTrace) */
+#include "pub_tool_threadstate.h"  /* pgbovine - VG_(get_running_tid) */
+#include "pub_tool_oset.h"         /* pgbovine - OSet for encoded_addrs */
 
 #include "mc_include.h"
+
+/* pgbovine - external variables for trace generation */
+extern VgFile* trace_fp;
+extern int stdout_fd;
+
+/* pgbovine - static variables for trace generation */
+static int n_steps = 0;
+const int MAX_STEPS = 5000;
+OSet* pg_encoded_addrs = NULL;
+#define USER_STDOUT_BUF_SIZE 10 * 1024 * 1024
+char user_stdout_buf[USER_STDOUT_BUF_SIZE];
+
+/* pgbovine - trace instrumentation function (stub for Phase 3b) */
+VG_REGPARM(1)
+void pg_trace_inst(Addr a)
+{
+   /* Stub implementation - full logic in Phase 3c */
+   if (trace_fp == NULL) return;
+   if (n_steps >= MAX_STEPS) return;
+   n_steps++;
+}
 
 
 /* FIXMEs JRS 2011-June-16.
