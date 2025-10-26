@@ -1,3 +1,76 @@
+================================================================================
+SPP-Valgrind: Modified Valgrind for C++ Execution Tracing
+================================================================================
+
+This is a modified version of Valgrind 3.27.0 that generates execution traces
+for C++ programs. These traces capture program state at each instruction,
+including stack frames, local/global variables, heap allocations, and stdout
+output.
+
+Modifications Overview
+----------------------
+This implementation is based on Philip Guo's (pgbovine) original modifications
+to Valgrind for Online Python Tutor, which enabled execution tracing for C/C++
+programs. The original work used Valgrind 3.11.0 (circa 2015).
+
+This fork represents a complete port and modernization:
+- Updated from Valgrind 3.11.0 to Valgrind 3.27.0 (2024)
+- Adapted all debug info API calls to use DiEpoch for epoch-aware queries
+- Added ARM64 support via CFA register mapping
+- Fixed stdout capture using file descriptor redirection
+- Migrated JSON library integration to use Valgrind memory functions
+
+Key Features Added
+------------------
+- **Execution Trace Generation**: Captures program state at each instruction
+  - Stack frame information with function names and nesting
+  - Local and global variable values with type information
+  - Heap memory allocations and pointer relationships
+  - Program stdout output synchronized with execution steps
+
+- **Debug Info Enhancements**:
+  - Full variable name capture (removes 16-char truncation limit)
+  - Variable traversal functions for locals and globals
+  - JSON-formatted output for structured trace data
+  - Memory definedness checking to avoid reading uninitialized data
+
+- **Modern Compatibility**:
+  - Works on Amazon Linux 2023 with ARM64 architecture
+  - Compatible with GCC 11+ compiled binaries
+  - Supports modern DWARF debug info formats
+
+Modified Files
+--------------
+- include/pub_tool_debuginfo.h: Added traversal function declarations, JSON library
+- coregrind/m_debuginfo/debuginfo.c: Variable traversal implementations
+- coregrind/m_debuginfo/tytypes.c: Type printing as JSON
+- coregrind/m_debuginfo/priv_tytypes.h: Internal function declarations
+- memcheck/mc_main.c: Command-line options, trace file handling
+- memcheck/mc_translate.c: Instrumentation to call trace function at each step
+- memcheck/mc_include.h: Shared declarations for trace generation
+
+Usage
+-----
+To generate a trace file:
+
+  valgrind --tool=memcheck --source-filename=program.cpp \
+           --trace-filename=/tmp/trace.vgtrace \
+           ./compiled_program
+
+The trace file contains JSON-formatted execution steps showing the complete
+program state at each instruction.
+
+License
+-------
+These modifications maintain the original Valgrind GPL v3+ license.
+All contributed code is available under GPL version 3 or later.
+
+For the original See++ project, see: https://github.com/knazir/SeePlusPlus
+
+================================================================================
+Original Valgrind README
+================================================================================
+
 Release notes for Valgrind
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 If you are building a binary package of Valgrind for distribution,
