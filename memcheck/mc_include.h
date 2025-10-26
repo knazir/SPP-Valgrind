@@ -137,6 +137,19 @@ extern VgHashTable *MC_(malloc_list);
 /* For tracking memory pools. */
 extern VgHashTable *MC_(mempool_list);
 
+/* pgbovine - global for source filename filtering */
+extern HChar pg_source_filename[1000];
+
+/* pgbovine - moved from mc_main.c and made non-static for trace generation */
+typedef enum {
+   MC_Ok = 5,
+   MC_AddrErr = 6,
+   MC_ValueErr = 7
+} MC_ReadResult;
+
+MC_ReadResult is_mem_defined (Addr a, SizeT len,
+                              /*OUT*/Addr* bad_addr, /*OUT*/UInt* otag);
+
 /* Shadow memory functions */
 Bool MC_(check_mem_is_noaccess)( Addr a, SizeT len, Addr* bad_addr );
 void MC_(make_mem_noaccess)        ( Addr a, SizeT len );

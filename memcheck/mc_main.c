@@ -48,6 +48,8 @@
 #include "pub_tool_xarray.h"
 #include "pub_tool_xtree.h"
 #include "pub_tool_xtmemory.h"
+#include "pub_tool_vki.h"       /* pgbovine - VKI_* constants for file operations */
+#include "pub_tool_libcfile.h"  /* pgbovine - VgFile, VG_(fopen), VG_(fclose) */
 
 #include "mc_include.h"
 #include "memcheck.h"   /* for client requests */
@@ -412,6 +414,12 @@ static struct {
        auxmap_L1[N_AUXMAP_L1];
 
 static OSet* auxmap_L2 = NULL;
+
+/* pgbovine - global variables for trace generation */
+HChar pg_source_filename[1000];  /* definition (declared extern in mc_include.h) */
+static Bool pg_source_filename_init = False;
+VgFile* trace_fp = NULL;
+int stdout_fd = 0;
 
 static void init_auxmap_L1_L2 ( void )
 {
@@ -4224,14 +4232,7 @@ void MC_(helperc_MAKE_STACK_UNINIT_128_no_o) ( Addr base )
 /*--- Checking memory                                      ---*/
 /*------------------------------------------------------------*/
 
-typedef
-   enum {
-      MC_Ok = 5,
-      MC_AddrErr = 6,
-      MC_ValueErr = 7
-   }
-   MC_ReadResult;
-
+/* pgbovine - MC_ReadResult typedef moved to mc_include.h and made non-static */
 
 /* Check permissions for address range.  If inadequate permissions
    exist, *bad_addr is set to the offending address, so the caller can
@@ -4278,9 +4279,10 @@ static Bool is_mem_addressable ( Addr a, SizeT len,
    return True;
 }
 
-static MC_ReadResult is_mem_defined ( Addr a, SizeT len,
-                                      /*OUT*/Addr* bad_addr,
-                                      /*OUT*/UInt* otag )
+/* pgbovine - made non-static for trace generation */
+MC_ReadResult is_mem_defined ( Addr a, SizeT len,
+                               /*OUT*/Addr* bad_addr,
+                               /*OUT*/UInt* otag )
 {
    SizeT i;
    UWord vabits2;
@@ -6277,6 +6279,17 @@ static Bool mc_process_cmd_line_options(const HChar* arg)
                        MC_(clo_xtree_leak)) {}
    else if VG_STR_CLO (arg, "--xtree-leak-file",
                        MC_(clo_xtree_leak_file)) {}
+
+   /* pgbovine - command-line options for trace generation */
+   else if VG_STR_CLO(arg, "--source-filename", tmp_str) {
+      VG_(strcpy)(pg_source_filename, tmp_str);
+      pg_source_filename_init = True;
+   }
+   else if VG_STR_CLO(arg, "--trace-filename", tmp_str) {
+      trace_fp = VG_(fopen)(tmp_str,
+                            VKI_O_CREAT|VKI_O_TRUNC|VKI_O_WRONLY,
+                            VKI_S_IRUSR|VKI_S_IWUSR);
+   }
 
    else
       return VG_(replacement_malloc_process_cmd_line_option)(arg);
@@ -8527,6 +8540,11 @@ static void mc_fini ( Int exitcode )
       VG_(message)(Vg_DebugMsg,
         "------ Valgrind's client block stats follow ---------------\n" );
       show_client_block_stats();
+   }
+
+   /* pgbovine - close trace file if it was opened */
+   if (trace_fp != NULL) {
+      VG_(fclose)(trace_fp);
    }
 }
 
