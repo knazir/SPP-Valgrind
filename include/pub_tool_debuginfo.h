@@ -31,6 +31,8 @@
 
 #include "pub_tool_basics.h"   // VG_ macro, DiEpoch
 #include "pub_tool_xarray.h"   // XArray
+#include "pub_tool_oset.h"     // pgbovine - OSet
+#include "pub_tool_libcprint.h"  // pgbovine - VgFile
 
 
 /*====================================================================*/
@@ -445,6 +447,19 @@ bool json_check(const JsonNode *node, char errmsg[256]);
 #endif
 
 // END json.h
+
+
+/* pgbovine - Variable traversal functions for trace generation */
+
+extern Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
+                                        Addr ip, Addr sp, Addr fp,
+                                        Bool is_static,
+                                        int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
+                                        OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp);
+
+extern Bool VG_(pg_traverse_global_var)(const HChar* varname, Addr data_addr,
+                                        int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
+                                        OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp);
 
 
 #endif   // __PUB_TOOL_DEBUGINFO_H
