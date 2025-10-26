@@ -471,9 +471,12 @@ case "${host_os}" in
 		  DEFAULT_SUPP="$srcdir/darwin17.supp ${DEFAULT_SUPP}"
 		  DEFAULT_SUPP="$srcdir/darwin10-drd.supp ${DEFAULT_SUPP}"
 		  ;;
-             *) 
-		  AC_MSG_RESULT([unsupported (${kernel})])
-		  AC_MSG_ERROR([Valgrind works on Darwin 10.x, 11.x, 12.x, 13.x, 14.x, 15.x, 16.x and 17.x (Mac OS X 10.6/7/8/9/10/11 and macOS 10.12/13)])
+             *)
+		  AC_MSG_RESULT([unsupported but allowing (${kernel})])
+		  AC_MSG_WARN([Valgrind officially works on Darwin 10.x-17.x, but allowing for testing])
+		  AC_DEFINE([DARWIN_VERS], DARWIN_10_13, [Darwin / Mac OS X version])
+		  DEFAULT_SUPP="$srcdir/darwin17.supp ${DEFAULT_SUPP}"
+		  DEFAULT_SUPP="$srcdir/darwin10-drd.supp ${DEFAULT_SUPP}"
 		  ;;
 	esac
         ;;
