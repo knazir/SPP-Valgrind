@@ -4836,6 +4836,15 @@ Addr ML_(get_CFA) ( Addr ip, Addr sp, Addr fp,
      return compute_cfa(&uregs,
                         min_accessible,  max_accessible, ce->di, ce->cfsi_m);
    }
+#elif defined(VGA_arm64)
+   { D3UnwindRegs uregs;
+     uregs.pc = ip;
+     uregs.sp = sp;
+     uregs.x29 = fp;  /* FP is x29 on ARM64 */
+     uregs.x30 = 0;   /* LR */
+     return compute_cfa(&uregs,
+                        min_accessible,  max_accessible, ce->di, ce->cfsi_m);
+   }
 
 #  else
    return 0; /* indicates failure */
@@ -5991,17 +6000,32 @@ void analyse_deps ( /*MOD*/XArray* /* of FrameBlock */ blocks,
    vg_assert(res_sp_6k.kind == res_fp_6k.kind);
    vg_assert(res_sp_6k.kind == res_fp_7k.kind);
 
+   if (debug)
+      VG_(printf)("adeps:   res_sp_6k.kind = %d (GXR_Addr=%d, GXR_Value=%d, GXR_RegNo=%d, GXR_Failure=%d)\n",
+                  res_sp_6k.kind, GXR_Addr, GXR_Value, GXR_RegNo, GXR_Failure);
+
+   if (res_sp_6k.kind == GXR_Failure) {
+      if (debug)
+         VG_(printf)("adeps:   GXR_Failure reason: %s\n", (HChar*)res_sp_6k.word);
+   }
+
    if (res_sp_6k.kind == GXR_Addr) {
       StackBlock block;
       GXResult res;
       UWord sp_delta = res_sp_7k.word - res_sp_6k.word;
       UWord fp_delta = res_fp_7k.word - res_fp_6k.word;
+
+      if (debug)
+         VG_(printf)("adeps:   sp_delta=%lu, fp_delta=%lu\n", sp_delta, fp_delta);
+
       vg_assert(sp_delta == 0 || sp_delta == 1024);
       vg_assert(fp_delta == 0 || fp_delta == 1024);
 
       if (sp_delta == 0 && fp_delta == 0) {
          /* depends neither on sp nor fp, so it can't be a stack
             local.  Ignore it. */
+         if (debug)
+            VG_(printf)("adeps:   SKIPPED - depends on neither SP nor FP\n");
       }
       else
       if (sp_delta == 1024 && fp_delta == 0) {
@@ -6022,6 +6046,8 @@ void analyse_deps ( /*MOD*/XArray* /* of FrameBlock */ blocks,
          block.name[ sizeof(block.name)-1 ] = 0;
          block.fullname = var->name; /* pgbovine - full variable name */
          VG_(addToXA)( blocks, &block );
+         if (debug)
+            VG_(printf)("adeps:   ADDED SP-relative block for %s\n", var->name);
       }
       else
       if (sp_delta == 0 && fp_delta == 1024) {
@@ -6042,10 +6068,17 @@ void analyse_deps ( /*MOD*/XArray* /* of FrameBlock */ blocks,
          block.name[ sizeof(block.name)-1 ] = 0;
          block.fullname = var->name; /* pgbovine - full variable name */
          VG_(addToXA)( blocks, &block );
+         if (debug)
+            VG_(printf)("adeps:   ADDED FP-relative block for %s\n", var->name);
       }
       else {
          vg_assert(0);
       }
+   }
+   else {
+      /* Location expression did not evaluate to an address */
+      if (debug)
+         VG_(printf)("adeps:   SKIPPED - location expression kind is not GXR_Addr\n");
    }
 }
 
@@ -6070,7 +6103,7 @@ VG_(di_get_stack_blocks_at_ip)( Addr ip, Bool arrays_only )
    static UInt n_search = 0;
    static UInt n_steps = 0;
    n_search++;
-   if (debug)
+   if (0&&debug)
       VG_(printf)("QQQQ: dgsbai: ip %#lx\n", ip);
    /* first, find the DebugInfo that pertains to 'ip'. */
    for (di = debugInfo_list; di; di = di->next) {
@@ -6104,8 +6137,13 @@ VG_(di_get_stack_blocks_at_ip)( Addr ip, Bool arrays_only )
    /* End of performance-enhancing hack. */
 
    /* any var info at all? */
-   if (!di->varinfo)
+   if (!di->varinfo) {
+      if (debug)
+         VG_(printf)("QQQQ:   NO VARINFO!\n");
       return res; /* currently empty */
+   }
+   if (debug)
+      VG_(printf)("QQQQ:   varinfo exists, size=%ld\n", VG_(sizeXA)(di->varinfo));
 
    /* Work through the scopes from most deeply nested outwards,
       looking for code address ranges that bracket 'ip'.  The
