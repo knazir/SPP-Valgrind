@@ -1185,7 +1185,7 @@ void emit_string(SB *out, const char *str)
   const char *s = str;
   char *b;
   
-  // modified by pgbovine to remove the original assertion and instead to simply
+  // modified by spp to remove the original assertion and instead to simply
   // print out an unknown symbol like "???" for non-UTF8-encodable strings:
   //vg_assert(utf8_validate(str));
   if (!utf8_validate(str)) {
@@ -6044,7 +6044,7 @@ void analyse_deps ( /*MOD*/XArray* /* of FrameBlock */ blocks,
          if (var->name)
             VG_(strncpy)( &block.name[0], var->name, sizeof(block.name)-1 );
          block.name[ sizeof(block.name)-1 ] = 0;
-         block.fullname = var->name; /* pgbovine - full variable name */
+         block.fullname = var->name; /* spp - full variable name */
          VG_(addToXA)( blocks, &block );
          if (debug)
             VG_(printf)("adeps:   ADDED SP-relative block for %s\n", var->name);
@@ -6066,7 +6066,7 @@ void analyse_deps ( /*MOD*/XArray* /* of FrameBlock */ blocks,
          if (var->name)
             VG_(strncpy)( &block.name[0], var->name, sizeof(block.name)-1 );
          block.name[ sizeof(block.name)-1 ] = 0;
-         block.fullname = var->name; /* pgbovine - full variable name */
+         block.fullname = var->name; /* spp - full variable name */
          VG_(addToXA)( blocks, &block );
          if (debug)
             VG_(printf)("adeps:   ADDED FP-relative block for %s\n", var->name);
@@ -6323,7 +6323,7 @@ VG_(di_get_global_blocks_from_dihandle) ( ULong di_handle, Bool  arrays_only )
             VG_(strncpy)(&gb.soname[0], di->soname, sizeof(gb.soname)-1);
             vg_assert(gb.name[ sizeof(gb.name)-1 ] == 0);
             vg_assert(gb.soname[ sizeof(gb.soname)-1 ] == 0);
-            gb.fullname = var->name; /* pgbovine - full variable name */
+            gb.fullname = var->name; /* spp - full variable name */
 
             VG_(addToXA)( gvars, &gb );
 
@@ -6336,7 +6336,7 @@ VG_(di_get_global_blocks_from_dihandle) ( ULong di_handle, Bool  arrays_only )
    return gvars;
 }
 
-/* pgbovine - Get debug info handle at given instruction pointer.
+/* spp - Get debug info handle at given instruction pointer.
    Adapted from VG_(di_get_stack_blocks_at_ip). Returns the handle
    of the DebugInfo that contains the given IP, or 0 if not found. */
 UWord pg_get_di_handle_at_ip(Addr ip)
@@ -6651,7 +6651,7 @@ SizeT VG_(data_size)(void)
 /*--- end                                                          ---*/
 /*--------------------------------------------------------------------*/
 
-/* pgbovine - Traverse local variable and output to trace file */
+/* spp - Traverse local variable and output to trace file */
 Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
                                  Addr ip, Addr sp, Addr fp,
                                  Bool is_static, /* True if this is a static var declared within a function */
@@ -6761,7 +6761,7 @@ Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
                                      // correct since static vars are 'global' (#tricky)
                                      is_static ? NULL : &regs,
                                      data_addr, di )) {
-            // pgbovine
+            // spp
             if (prefix_with_comma) { // only do this on a successful print!
               VG_(fprintf)(trace_fp, ",");
             }
@@ -6784,7 +6784,7 @@ Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
    return False;
 }
 
-/* pgbovine - Traverse global variable and output to trace file */
+/* spp - Traverse global variable and output to trace file */
 Bool VG_(pg_traverse_global_var)(const HChar* varname, Addr data_addr,
                                  int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
                                  OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp) {

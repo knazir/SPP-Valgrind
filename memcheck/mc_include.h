@@ -137,10 +137,10 @@ extern VgHashTable *MC_(malloc_list);
 /* For tracking memory pools. */
 extern VgHashTable *MC_(mempool_list);
 
-/* pgbovine - global for source filename filtering */
+/* spp - global for source filename filtering */
 extern HChar pg_source_filename[1000];
 
-/* pgbovine - moved from mc_main.c and made non-static for trace generation */
+/* spp - moved from mc_main.c and made non-static for trace generation */
 typedef enum {
    MC_Ok = 5,
    MC_AddrErr = 6,

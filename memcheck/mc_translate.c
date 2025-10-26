@@ -37,29 +37,29 @@
 #include "pub_tool_xarray.h"
 #include "pub_tool_mallocfree.h"
 #include "pub_tool_libcbase.h"
-#include "pub_tool_libcfile.h"     /* pgbovine - VgFile for trace output */
-#include "pub_tool_debuginfo.h"    /* pgbovine - debug info traversal */
-#include "pub_tool_stacktrace.h"   /* pgbovine - VG_(get_StackTrace) */
-#include "pub_tool_threadstate.h"  /* pgbovine - VG_(get_running_tid) */
-#include "pub_tool_oset.h"         /* pgbovine - OSet for encoded_addrs */
+#include "pub_tool_libcfile.h"     /* spp - VgFile for trace output */
+#include "pub_tool_debuginfo.h"    /* spp - debug info traversal */
+#include "pub_tool_stacktrace.h"   /* spp - VG_(get_StackTrace) */
+#include "pub_tool_threadstate.h"  /* spp - VG_(get_running_tid) */
+#include "pub_tool_oset.h"         /* spp - OSet for encoded_addrs */
 
 #include "mc_include.h"
 
-/* pgbovine - external variables for trace generation */
+/* spp - external variables for trace generation */
 extern VgFile* trace_fp;
 extern int stdout_fd;
 
-/* pgbovine - static variables for trace generation */
+/* spp - static variables for trace generation */
 static int n_steps = 0;
 const int MAX_STEPS = 5000;
 OSet* pg_encoded_addrs = NULL;
 #define USER_STDOUT_BUF_SIZE 10 * 1024 * 1024
 char user_stdout_buf[USER_STDOUT_BUF_SIZE];
 
-/* pgbovine - forward declaration for trace instrumentation function */
+/* spp - forward declaration for trace instrumentation function */
 VG_REGPARM(1) void pg_trace_inst(Addr ad);
 
-/* pgbovine - trace instrumentation function (full implementation) */
+/* spp - trace instrumentation function (full implementation) */
 VG_REGPARM(1)
 void pg_trace_inst(Addr a)
 {
@@ -166,7 +166,7 @@ void pg_trace_inst(Addr a)
 
         Bool res = VG_(pg_traverse_global_var)(gb->fullname, gb->addr, is_mem_defined, pg_encoded_addrs, !first_elt, trace_fp);
         if (!res) {
-          // pgbovine: res != True for static vars defined inside of functions
+          // spp: res != True for static vars defined inside of functions
           //
           // small example:
           //
@@ -9205,7 +9205,7 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
             schemeS( &mce, st );
       }
 
-      IRDirty *di; // pgbovine
+      IRDirty *di; // spp
 
       /* Generate instrumentation code for each stmt ... */
 
@@ -9253,7 +9253,7 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
             break;
 
          case Ist_IMark:
-            // pgbovine -- from fjalar
+            // spp -- from fjalar
             di = unsafeIRDirty_0_N(1/*regparms*/,
                  "pg_trace_inst",
                  &pg_trace_inst,
@@ -9261,7 +9261,7 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
             // TODO: need to mark what parts the dirty instruction might access
             // so that Valgrind doesn't optimize code away or something?!?
             stmt('V', &mce, IRStmt_Dirty(di));
-            // END pgbovine
+            // END spp
             break;
 
          case Ist_NoOp:

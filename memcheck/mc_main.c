@@ -48,8 +48,8 @@
 #include "pub_tool_xarray.h"
 #include "pub_tool_xtree.h"
 #include "pub_tool_xtmemory.h"
-#include "pub_tool_vki.h"       /* pgbovine - VKI_* constants for file operations */
-#include "pub_tool_libcfile.h"  /* pgbovine - VgFile, VG_(fopen), VG_(fclose) */
+#include "pub_tool_vki.h"       /* spp - VKI_* constants for file operations */
+#include "pub_tool_libcfile.h"  /* spp - VgFile, VG_(fopen), VG_(fclose) */
 
 #include "mc_include.h"
 #include "memcheck.h"   /* for client requests */
@@ -415,7 +415,7 @@ static struct {
 
 static OSet* auxmap_L2 = NULL;
 
-/* pgbovine - global variables for trace generation */
+/* spp - global variables for trace generation */
 HChar pg_source_filename[1000];  /* definition (declared extern in mc_include.h) */
 static Bool pg_source_filename_init = False;
 VgFile* trace_fp = NULL;
@@ -4232,7 +4232,7 @@ void MC_(helperc_MAKE_STACK_UNINIT_128_no_o) ( Addr base )
 /*--- Checking memory                                      ---*/
 /*------------------------------------------------------------*/
 
-/* pgbovine - MC_ReadResult typedef moved to mc_include.h and made non-static */
+/* spp - MC_ReadResult typedef moved to mc_include.h and made non-static */
 
 /* Check permissions for address range.  If inadequate permissions
    exist, *bad_addr is set to the offending address, so the caller can
@@ -4279,7 +4279,7 @@ static Bool is_mem_addressable ( Addr a, SizeT len,
    return True;
 }
 
-/* pgbovine - made non-static for trace generation */
+/* spp - made non-static for trace generation */
 MC_ReadResult is_mem_defined ( Addr a, SizeT len,
                                /*OUT*/Addr* bad_addr,
                                /*OUT*/UInt* otag )
@@ -6280,7 +6280,7 @@ static Bool mc_process_cmd_line_options(const HChar* arg)
    else if VG_STR_CLO (arg, "--xtree-leak-file",
                        MC_(clo_xtree_leak_file)) {}
 
-   /* pgbovine - command-line options for trace generation */
+   /* spp - command-line options for trace generation */
    else if VG_STR_CLO(arg, "--source-filename", tmp_str) {
       VG_(strcpy)(pg_source_filename, tmp_str);
       pg_source_filename_init = True;
@@ -8542,7 +8542,7 @@ static void mc_fini ( Int exitcode )
       show_client_block_stats();
    }
 
-   /* pgbovine - close trace file if it was opened */
+   /* spp - close trace file if it was opened */
    if (trace_fp != NULL) {
       VG_(fclose)(trace_fp);
    }

@@ -31,8 +31,8 @@
 
 #include "pub_tool_basics.h"   // VG_ macro, DiEpoch
 #include "pub_tool_xarray.h"   // XArray
-#include "pub_tool_oset.h"     // pgbovine - OSet
-#include "pub_tool_libcprint.h"  // pgbovine - VgFile
+#include "pub_tool_oset.h"     // spp - OSet
+#include "pub_tool_libcprint.h"  // spp - VgFile
 
 
 /*====================================================================*/
@@ -228,17 +228,17 @@ typedef
       Bool     spRel;      /* True => sp-rel, False => fp-rel */
       Bool     isVec;      /* does block have an array type, or not? */
       HChar    name[16];   /* first 15 chars of name (asciiz) */
-      const HChar* fullname; /* pgbovine - full variable name */
+      const HChar* fullname; /* spp - full variable name */
    }
    StackBlock;
 
 extern XArray* /* of StackBlock */
 VG_(di_get_stack_blocks_at_ip)( Addr ip, Bool arrays_only );
 
-/* pgbovine - Get debug info handle at given instruction pointer */
+/* spp - Get debug info handle at given instruction pointer */
 UWord pg_get_di_handle_at_ip(Addr ip);
 
-/* pgbovine - variable traversal functions for trace generation */
+/* spp - variable traversal functions for trace generation */
 Bool VG_(pg_traverse_global_var)(const HChar* varname, Addr data_addr,
                                  int is_mem_defined_func(Addr, SizeT, Addr*, UInt*),
                                  OSet* encoded_addrs, Bool prefix_with_comma, VgFile* trace_fp);
@@ -263,7 +263,7 @@ typedef
       Bool  isVec;      /* does block have an array type, or not? */
       HChar name[16];   /* first 15 chars of name (asciiz) */
       HChar soname[16]; /* first 15 chars of name (asciiz) */
-      const HChar* fullname; /* pgbovine - full variable name */
+      const HChar* fullname; /* spp - full variable name */
    }
    GlobalBlock;
 
@@ -334,7 +334,7 @@ const HChar* VG_(pp_SectKind)( VgSectKind kind );
 VgSectKind VG_(DebugInfo_sect_kind)( /*OUT*/const HChar** objname, Addr a);
 
 
-// pgbovine - super hacky -- INLINED json.h and json.c from here:
+// spp - super hacky -- INLINED json.h and json.c from here:
 // http://git.ozlabs.org/?p=ccan;a=tree;f=ccan/json;hb=HEAD
 // http://stackoverflow.com/a/6588482
 // BEGIN json.h
@@ -460,7 +460,7 @@ bool json_check(const JsonNode *node, char errmsg[256]);
 // END json.h
 
 
-/* pgbovine - Variable traversal functions for trace generation */
+/* spp - Variable traversal functions for trace generation */
 
 extern Bool VG_(pg_traverse_local_var) (const HChar* varname, Addr data_addr,
                                         Addr ip, Addr sp, Addr fp,

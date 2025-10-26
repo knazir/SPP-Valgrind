@@ -155,7 +155,7 @@ void ML_(pp_TyEnts)( const XArray* tyents, const HChar* who );
 void ML_(pp_TyEnt_C_ishly)( const XArray* /* of TyEnt */ tyents,
                             UWord cuOff );
 
-/* pgbovine - Print variable info as JSON for trace generation */
+/* spp - Print variable info as JSON for trace generation */
 void ML_(pg_pp_varinfo)( DiEpoch ep,
                          const XArray* /* of TyEnt */ tyents,
                          UWord cuOff,

@@ -37,9 +37,9 @@
 #include "pub_core_libcbase.h"
 #include "pub_core_libcprint.h"
 #include "pub_core_xarray.h"   /* to keep priv_tytypes.h happy */
-#include "pub_core_execontext.h" /* pgbovine - ExeContext (needed by addrinfo.h) */
-#include "pub_core_addrinfo.h"  /* pgbovine - AddrInfo, VG_(describe_addr) */
-#include "pub_core_mallocfree.h" /* pgbovine - VG_(malloc), VG_(free) */
+#include "pub_core_execontext.h" /* spp - ExeContext (needed by addrinfo.h) */
+#include "pub_core_addrinfo.h"  /* spp - AddrInfo, VG_(describe_addr) */
+#include "pub_core_mallocfree.h" /* spp - VG_(malloc), VG_(free) */
 
 #include "priv_misc.h"         /* dinfo_zalloc/free/strdup */
 #include "priv_d3basics.h"     /* ML_(evaluate_Dwarf3_Expr) et al */
@@ -928,7 +928,7 @@ XArray* /*HChar*/ ML_(describe_type)( /*OUT*/PtrdiffT* residual_offset,
    return xa;
 }
 
-/* pgbovine - Helper function to get element size */
+/* spp - Helper function to get element size */
 SizeT pg_get_elt_size(const XArray* /* of TyEnt */ ents,
                       UWord cuOff_to_find);
 SizeT pg_get_elt_size(const XArray* /* of TyEnt */ ents,
@@ -971,7 +971,7 @@ SizeT pg_get_elt_size(const XArray* /* of TyEnt */ ents,
 }
 
 
-// pgbovine version of ML_(pp_TyEnt_C_ishly)
+// spp version of ML_(pp_TyEnt_C_ishly)
 void ML_(pg_pp_varinfo)( DiEpoch ep,
                          const XArray* /* of TyEnt */ tyents,
                          UWord cuOff,
@@ -982,7 +982,7 @@ void ML_(pg_pp_varinfo)( DiEpoch ep,
 {
    TyEnt* ent = ML_(TyEnts__index_by_cuOff)( tyents, NULL, cuOff );
    if (!ent) {
-      vg_assert(0); // pgbovine - die hard
+      vg_assert(0); // spp - die hard
       VG_(printf)("**type-has-invalid-cuOff**");
       return;
    }
