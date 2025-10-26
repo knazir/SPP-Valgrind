@@ -56,6 +56,9 @@ OSet* pg_encoded_addrs = NULL;
 #define USER_STDOUT_BUF_SIZE 10 * 1024 * 1024
 char user_stdout_buf[USER_STDOUT_BUF_SIZE];
 
+/* pgbovine - forward declaration for trace instrumentation function */
+VG_REGPARM(1) void pg_trace_inst(Addr ad);
+
 /* pgbovine - trace instrumentation function (full implementation) */
 VG_REGPARM(1)
 void pg_trace_inst(Addr a)
@@ -9198,9 +9201,11 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
 
       if (MC_(clo_mc_level) == 3) {
          /* See comments on case Ist_CAS below. */
-         if (st->tag != Ist_CAS) 
+         if (st->tag != Ist_CAS)
             schemeS( &mce, st );
       }
+
+      IRDirty *di; // pgbovine
 
       /* Generate instrumentation code for each stmt ... */
 
@@ -9248,6 +9253,15 @@ IRSB* MC_(instrument) ( VgCallbackClosure* closure,
             break;
 
          case Ist_IMark:
+            // pgbovine -- from fjalar
+            di = unsafeIRDirty_0_N(1/*regparms*/,
+                 "pg_trace_inst",
+                 &pg_trace_inst,
+                 mkIRExprVec_1(IRExpr_Const(IRConst_U64(st->Ist.IMark.addr))));
+            // TODO: need to mark what parts the dirty instruction might access
+            // so that Valgrind doesn't optimize code away or something?!?
+            stmt('V', &mce, IRStmt_Dirty(di));
+            // END pgbovine
             break;
 
          case Ist_NoOp:
